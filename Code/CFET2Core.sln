@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.32014.148
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CFET2Core", "CFET2Core\CFET2Core.csproj", "{E4BD3DE4-5F65-409D-A99A-7D9DB54BF122}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CodeTest", "CodeTest\CodeTest.csproj", "{FFDEB385-D6FF-4D2E-AD28-4AC1FD7253CB}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{E4BD3DE4-5F65-409D-A99A-7D9DB54BF122}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E4BD3DE4-5F65-409D-A99A-7D9DB54BF122}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E4BD3DE4-5F65-409D-A99A-7D9DB54BF122}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E4BD3DE4-5F65-409D-A99A-7D9DB54BF122}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FFDEB385-D6FF-4D2E-AD28-4AC1FD7253CB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FFDEB385-D6FF-4D2E-AD28-4AC1FD7253CB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FFDEB385-D6FF-4D2E-AD28-4AC1FD7253CB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FFDEB385-D6FF-4D2E-AD28-4AC1FD7253CB}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {D50AB6EC-A02C-4D61-B4B4-7C8542B3A32A}
+	EndGlobalSection
+EndGlobal
