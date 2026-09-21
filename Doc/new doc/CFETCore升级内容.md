@@ -1,5 +1,14 @@
 # CFETCore升级内容
 
+## 当前实现与阅读边界（2026-09-21）
+
+本文保留升级目标和实施步骤，步骤中的“建议/需要”不表示该能力仍未实现。当前已实现 Hub 资源订阅、远程初始 Get、WebSocket 服务端资源订阅、资源观测和重连重订阅；测试覆盖与端到端验证应分别说明，本文不作为本次测试通过记录。
+
+- 未标记 `[Cfet2Event]` 的资源仅支持标量自动观测，复杂类型或无法确定标量类型的声明会拒绝资源订阅；完整类型列表见 [Core README](../../README.md#资源自动观测的类型边界)。
+- 原生资源须显式发布；`GetPathFor(nameof(资源成员))` 解析成员特性中的名称和 Thing 实例路径。分离的 Config 方法须在 Set 实现上标记 `[Cfet2Event]`。
+- 远程 `SubscribeResource` 返回只确认初始 Get 与本地订阅注册，不等待远端成功 ACK；后续可能进入 Failed，须查询 WebSocket 诊断或日志。初始读取与注册之间不存在原子性保证。
+- EventHub 关闭行为和配置边界以 [Core README](../../README.md) 为准。
+
 CFETCore 是本次 CFET 升级中的主要改动部分。整体目标是在保持 Core 框架兼容性的基础上，升级通信、事件和订阅模型，并统一资源访问、事件订阅和远程通讯的管理方式。
 
 本次 CFET 升级后不再支持 .NET Framework 4.6.1，CFET 项目整体升级到 `net10.0`。但 CFETCore 仍然保持 `netstandard2.0`，因为 Thing 仍然是 `netstandard2.0`。
@@ -31,30 +40,75 @@ CFET 项目整体升级时需要检查：
 4. `net10.0` 项目引用 `netstandard2.0` Core 的兼容性。
 5. 已有 Thing、CommunicationModule、EventHub 相关代码是否依赖旧框架行为。
 
-## 2. 新的资源动作：Subscribe
+## 2. 新的资源级订阅 API：Subscribe
 
-新增 `Subscribe` 动作，用于表示：
+新增 `SubscribeResource` API，用于表示：
 
 ```text
 调用方希望持续获得某个资源的变化。
 ```
 
-`Subscribe` 与 `Get` 的区别在于：
+`SubscribeResource` 与 `Get` 的区别在于：
 
 1. `Get` 是一次性读取当前资源值。
-2. `Subscribe` 是持续性动作。
-3. 调用方不需要关心资源是否具备主动发布事件的能力。
-4. Core 负责根据资源能力选择事件来源。
+2. `SubscribeResource` 是持续性动作。
+3. 资源级 `Subscribe` 建立时应先返回一次当前资源值，后续变化再通过事件推送。
+4. 调用方不需要关心资源是否具备主动发布事件的能力。
+5. Core 负责根据资源能力选择事件来源。
+
+推荐接口：
+
+```csharp
+public ResourceSubscription SubscribeResource(
+    string resourceUri,
+    Action<EventArg> handler,
+    string eventType = "changed")
+```
+
+`SubscribeResource` 不加入 `AccessAction`，不复用 `TryAccessResourceSampleWithUri(...)`，因为订阅需要回调和 Token 生命周期。资源值仍统一使用 `ISample`：初始值通过 `ResourceSubscription.InitialValue` 返回，后续事件值通过 `EventArg.Sample` 推送。
+
+`SubscribeResource` 的成功条件是“初始 `Get` 成功 + 事件订阅成功”。订阅入口必须先拿到有效 `InitialValue`，再注册事件订阅；如果初始 `Get` 失败、返回 null 或返回 invalid sample，则认为订阅失败并抛错，不保留本地订阅、远程订阅或内部观测状态。远程资源也是同一策略：初始 `Get` 失败通常表示资源不可达、协议不可用、资源不存在或网络不通，因此不支持“订阅成功但 `InitialValue` 为 invalid”的半成功状态。
+
+当前已落地的调用方式：
+
+```csharp
+ISample currentValue;
+
+using var subscription = MyHub.SubscribeResource(
+    "/thing/Temperature",
+    e =>
+    {
+        currentValue = e.Sample;
+    });
+
+currentValue = subscription.InitialValue;
+```
+
+普通事件订阅和发布不再建议业务代码直接持有 `EventHub`，可以使用 Hub 层包装：
+
+```csharp
+var token = MyHub.Subscribe(new EventFilter("/thing/status", "changed"), handler);
+MyHub.Publish("/thing/status", "changed", value);
+MyHub.Publish(new EventArg("/thing/status", "changed", sample));
+MyHub.PublishResource("/thing/status", value);
+MyHub.Unsubscribe(token);
+```
+
+Thing 内部主动发布资源变化事件时，应优先使用 `MyHub.PublishResource(GetPathFor(nameof(资源成员)), value)`。`PublishResource` 默认事件类型为 `changed`；`GetPathFor` 会把 C# 成员名解析为 `[Cfet2Status(Name = "...")]` 或 `[Cfet2Config(Name = "...")]` 声明的对外资源名；如果没有显式 `Name`，则使用成员名。这样同一 Thing 类型多实例挂载时，事件会带上各自的 Thing 路径。
+
+`EventHub.Subscribe(...)`、`EventHub.Publish(...)` 和 `EventHub.Unsubscribe(...)` 仍保留为旧 Thing 兼容入口。
 
 Core 内部需要支持两条订阅路径：
 
 ```text
-资源带 [CFET2Event]:
+资源带 [Cfet2Event]:
   原生事件路径。
-  Thing 自己维护变化判断，并自己 EventHub.Publish。
+  Thing 自己维护变化判断，并使用 MyHub.PublishResource(GetPathFor(...), value) 发布。
+  Core 不进行内部观测，避免重复发布。
 
-资源不带 [CFET2Event]:
+资源不带 [Cfet2Event]:
   内部观测路径。
+  用于兼容旧 Thing。
   Core 周期 Get 该资源。
   发现变化后 EventHub.Publish。
 ```
@@ -69,11 +123,13 @@ Core 内部需要支持两条订阅路径：
 
 ```text
 原生事件路径:
-  资源带 [CFET2Event]。
+  资源带 [Cfet2Event]。
   Thing 自己维护变化判断，并自己发布事件。
+  Core 不观测、不自动发布。
 
 内部观测路径:
-  资源不带 [CFET2Event]。
+  资源不带 [Cfet2Event]。
+  用于兼容旧 Thing。
   服务器加入内部观测列表。
   周期 Get。
   发现变化后主动发布 event。
@@ -86,17 +142,28 @@ Core 内部需要支持两条订阅路径：
 3. 对观测到的资源变化统一调用 `EventHub.Publish`。
 4. 事件过滤和订阅逻辑继续由 `EventHub` 负责。
 5. Method 资源不进入事件系统。
+6. 资源级订阅返回初始值和后续事件 Token。
+7. 订阅入口先获取初始值，再注册事件订阅，避免调用方设置初始值时覆盖已经到达的事件。
+8. 初始值获取失败时，订阅整体失败并清理已建立的中间状态。
+
+当前测试覆盖：
+
+1. `[Cfet2Event]` 资源只接收 Thing 主动发布，不被 Core 内部观测。
+2. 未标记 `[Cfet2Event]` 的 Status/Config 可以被 Core 周期观测，变化后发布 `changed`。
+3. 多个订阅者订阅同一未标记资源时只建立一份观测。
+4. 初始 `Get` 失败时抛错，并且不保留订阅或观测状态。
+5. WebSocketCM 服务端收到远端订阅时，存在的资源走 `ResourceSubscription`，不存在的 source 回退普通事件订阅；存在但不可资源订阅的 Method 或非法事件类型会拒绝订阅。
 
 ## 4. 远程通讯统一管理
 
-当前 CFETCore 中远程资源访问和远程事件订阅是两套管理体系：
+升级前，CFETCore 中远程资源访问和远程事件订阅是两套管理体系：
 
 ```text
 Hub -> CommunicationManager -> CommunicationModule
 EventHub -> EventHub.RemoteEventHubs -> CommunicationModule
 ```
 
-升级后需要统一为：
+当前实现已统一为：
 
 ```text
 Hub -> CommunicationManager -> CommunicationModule
@@ -186,12 +253,13 @@ WebSocketCM
    - 新增 `IEventCommunicationModule`。
    - 实现 `HTTPCM` 和 `WebSocketCM`。
    - 让 `CommunicationManager` 能根据协议和能力选择对应模块。
-4. 实现新的 `Subscribe` 语义。
+4. 实现新的 `SubscribeResource` 语义。
    - Status 和 Config 支持订阅。
    - Method 不支持订阅。
    - 支持原生事件路径和内部观测路径。
 5. 实现新的事件设计。
-   - 支持 `[CFET2Event]` 标识的原生事件。
+   - 支持 `[Cfet2Event]` 标识的原生事件。
+   - 无 `[Cfet2Event]` 的旧资源由 Core 内部周期观测，默认周期为 500ms，可通过 `GlobalConfig.ResourceObservationIntervalMs` 配置。
    - 支持无事件资源的周期观测。
    - 统一通过 `EventHub.Publish` 发布资源变化。
 6. 测试现有 Thing 的适配程度。

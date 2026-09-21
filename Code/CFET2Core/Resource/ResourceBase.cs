@@ -28,6 +28,8 @@ namespace Jtext103.CFET2.Core.Resource
 
         public ResourceTypes ResourceType { get; protected set; } = ResourceTypes.Abstract;
 
+        public bool SupportsNativeEvent { get; internal set; } = false;
+
         /// <summary>
         /// get the describtion of this 
         /// </summary>

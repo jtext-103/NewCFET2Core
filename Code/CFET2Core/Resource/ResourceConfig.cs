@@ -252,6 +252,7 @@ namespace Jtext103.CFET2.Core.Resource
             {
                 var info = new ResourceInfo();
                 info.Type = ResourceTypes.Config;
+                info.SupportsNativeEvent = SupportsNativeEvent;
                 info.Implementations.Add(AccessAction.get, actionImplementedBy(ConfigAction.Get));
                 info.Implementations.Add(AccessAction.set, actionImplementedBy(ConfigAction.Set));
                 return info;

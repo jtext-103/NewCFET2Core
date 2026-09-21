@@ -1,6 +1,15 @@
 # CFET升级内容
 
-首先CFET升级需要进行底层的升级，不再支持net framework 4.6.1，全部升级到net 6.0往上。目前计划升级到net 10.0，升级后不再支持net framework。
+## 当前实现与阅读边界（2026-09-21）
+
+本文保留升级目标和实施步骤，步骤中的“建议/需要”不表示该能力仍未实现。当前已实现 Hub 资源订阅、远程初始 Get、WebSocket 服务端资源订阅、资源观测和重连重订阅；测试覆盖与端到端验证应分别说明，本文不作为本次测试通过记录。
+
+- 未标记 `[Cfet2Event]` 的资源仅支持标量自动观测，复杂类型或无法确定标量类型的声明会拒绝资源订阅；完整类型列表见 [Core README](../../README.md#资源自动观测的类型边界)。
+- 原生资源须显式发布；`GetPathFor(nameof(资源成员))` 解析成员特性中的名称和 Thing 实例路径。分离的 Config 方法须在 Set 实现上标记 `[Cfet2Event]`。
+- 远程 `SubscribeResource` 返回只确认初始 Get 与本地订阅注册，不等待远端成功 ACK；后续可能进入 Failed，须查询 WebSocket 诊断或日志。初始读取与注册之间不存在原子性保证。
+- EventHub 关闭行为和配置边界以 [Core README](../../README.md) 为准。
+
+首先CFET升级需要进行底层的升级，不再支持net framework 4.6.1，全部升级到net 6.0往上。当前 APP 与通信模块已升级到 net10.0，Core 与 Thing 保留 netstandard2.0；当前应用不再以 .NET Framework 为运行目标。
 
 升级包括cfet core 和 cfet app，都需要升级。
 
@@ -25,10 +34,10 @@
 与 `Get` 不同，`Subscribe` 是持续性的动作，调用方不需要关心资源是否真的会主动发布事件。Core 内部根据资源能力分成两条路径：
 
 ```text
-资源带 [CFET2Event]:
+资源带 [Cfet2Event]:
   原生事件路径。
   Thing 自己维护变化判断，并自己 EventHub.Publish。
-资源不带 [CFET2Event]:
+资源不带 [Cfet2Event]:
   内部观测路径。
     Core 周期 Get 该资源。
     发现变化后 EventHub.Publish。
@@ -42,22 +51,22 @@
 
 ```text
 原生事件路径:
-  资源带 [CFET2Event]。
+  资源带 [Cfet2Event]。
   Thing 自己维护变化判断，并自己发布事件。
 内部观测路径:
-  资源不带 [CFET2Event]，服务器加入内部观测列表，
+  资源不带 [Cfet2Event]，服务器加入内部观测列表，
   周期 Get，发现变化后主动发布 event。
 ```
 
 3. 远程通讯的统一管理
 
-目前 CFET Core 中存在两套远程通讯管理体系：
+升级前 CFET Core 中存在两套远程通讯管理体系：
 
 ```text
 Hub -> CommunicationManager -> CommunicationModule
 EventHub -> EventHub.RemoteEventHubs -> CommunicationModule
 ```
-现在需要统一成一套体系，由 `CommunicationManager` 统一管理所有远程通讯相关的功能，包括资源访问和事件订阅。
+当前已统一为一套体系，由 `CommunicationManager` 管理资源访问和事件订阅。
 
 ```text
 Hub -> CommunicationManager -> CommunicationModule

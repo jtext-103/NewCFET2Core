@@ -1,5 +1,14 @@
 # CFETCore 事件系统落地方案
 
+## 当前实现与阅读边界（2026-09-21）
+
+本文保留升级目标和实施步骤，步骤中的“建议/需要”不表示该能力仍未实现。当前已实现 Hub 资源订阅、远程初始 Get、WebSocket 服务端资源订阅、资源观测和重连重订阅；测试覆盖与端到端验证应分别说明，本文不作为本次测试通过记录。
+
+- 未标记 `[Cfet2Event]` 的资源仅支持标量自动观测，复杂类型或无法确定标量类型的声明会拒绝资源订阅；完整类型列表见 [Core README](../../README.md#资源自动观测的类型边界)。
+- 原生资源须显式发布；`GetPathFor(nameof(资源成员))` 解析成员特性中的名称和 Thing 实例路径。分离的 Config 方法须在 Set 实现上标记 `[Cfet2Event]`。
+- 远程 `SubscribeResource` 返回只确认初始 Get 与本地订阅注册，不等待远端成功 ACK；后续可能进入 Failed，须查询 WebSocket 诊断或日志。初始读取与注册之间不存在原子性保证。
+- EventHub 关闭行为和配置边界以 [Core README](../../README.md) 为准。
+
 本文档基于《CFETCore 事件处理总体设计》，用于指导事件系统从当前实现逐步落地到新设计。落地目标是：保持旧 Thing 的 `EventHub.Subscribe(...)`、`EventHub.Publish(...)` 兼容，同时将远程事件订阅、回流、分发和生命周期管理统一收敛到 `EventHub` 与 `IEventCommunicationModule` 的新职责边界中。
 
 ## 落地原则
@@ -23,16 +32,26 @@
 5. `EventHub.Subscribe(...)` 已经能根据 `filter.Host` 走远程事件通信模块。
 6. 已有 `DummyEventCommunicationModule` 测试覆盖阶段 3 的注册、启动、释放和远程订阅转发。
 
+## 当前实现状态
+
+截至本轮事件功能实现，Core 和 WebSocketCM 已完成以下能力：
+
+1. `IEventCommunicationModule` 不再接收业务 handler，远程事件统一通过 `RegisterEventCallback(...)` 回流到 `EventHub.ReceiveRemoteEvent(...)`。
+2. `EventHub` 已分离本地订阅和远程订阅，并使用 Host 参与远程事件隔离。
+3. `Hub` 提供普通事件包装：`Subscribe(EventFilter, Action<EventArg>)`、`Unsubscribe(Token)`、`Publish(string, string, object)` 和 `Publish(EventArg)`。旧 `EventHub.Subscribe(...)`、`EventHub.Publish(...)`、`EventHub.Unsubscribe(...)` 仍保留为兼容入口。
+4. 新增 `[Cfet2Event]`，用于标识支持原生事件的 Status/Config 资源。
+5. 新增 `SubscribeResource(string resourceUri, Action<EventArg> handler, string eventType = "changed")`，返回 `ResourceSubscription`，其中 `InitialValue` 是订阅建立时的 `ISample` 快照，`Token` 负责取消订阅。
+6. `SubscribeResource` 的成功条件是初始 `Get` 成功且事件订阅成功；初始 `Get` 失败、返回空或 invalid sample 时会抛错，并清理中间状态。
+7. 带 `[Cfet2Event]` 的资源由 Thing 主动 `Publish`，Core 不启动内部观测。
+8. 未带 `[Cfet2Event]` 的 Status/Config 资源由 Core 内部观测变化后发布 `changed`，默认周期为 500ms，可通过 `GlobalConfig.ResourceObservationIntervalMs` 配置。
+9. WebSocketCM 服务端订阅已改为持有 `Hub`：存在的资源走 `SubscribeResource`，不存在的 source 回退普通事件订阅；存在但不可资源订阅的 source 直接拒绝，不回退。
+10. WebSocketCM 客户端已覆盖断线重连后重订阅；资源形态 source 在重连后订阅数不重复，后续事件可以继续到达。
+
 当前主要缺口：
 
-1. `IEventCommunicationModule.Subscribe(...)` 仍接收业务 handler。
-2. 远程事件没有统一回流到 `EventHub.ReceiveRemoteEvent(...)`。
-3. `EventHub` 没有分离 `localSubDict` 和 `remoteSubDict`。
-4. `EventArg` 没有明确的远程来源 Host 字段。
-5. `Token` 缺少 Host。
-6. 没有远程 Host 隔离测试。
-7. 没有连接状态事件。
-8. 没有路由表和高并发取消订阅保护。
+1. 旧 Thing 仍可直接调用 `MyHub.EventHub.Publish(...)` 和 `MyHub.EventHub.Subscribe(...)`，后续可以逐步引导迁移到 Hub 包装，但不能破坏兼容。
+2. WebSocketCM 当前采用 at-most-once 投递，断线期间事件不做补偿。
+3. 完整的 HTTP 初始 Get + WebSocket 事件订阅端到端生产链路可在应用集成阶段继续补充测试；当前已分别覆盖 Core 资源订阅语义、WebSocket 服务端资源解析和 WebSocket 客户端断线重连重订阅。
 
 ## 阶段 0：冻结兼容基线
 

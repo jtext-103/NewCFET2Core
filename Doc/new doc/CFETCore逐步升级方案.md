@@ -1,5 +1,14 @@
 # CFETCore逐步升级方案
 
+## 当前实现与阅读边界（2026-09-21）
+
+本文保留升级目标和实施步骤，步骤中的“建议/需要”不表示该能力仍未实现。当前已实现 Hub 资源订阅、远程初始 Get、WebSocket 服务端资源订阅、资源观测和重连重订阅；测试覆盖与端到端验证应分别说明，本文不作为本次测试通过记录。
+
+- 未标记 `[Cfet2Event]` 的资源仅支持标量自动观测，复杂类型或无法确定标量类型的声明会拒绝资源订阅；完整类型列表见 [Core README](../../README.md#资源自动观测的类型边界)。
+- 原生资源须显式发布；`GetPathFor(nameof(资源成员))` 解析成员特性中的名称和 Thing 实例路径。分离的 Config 方法须在 Set 实现上标记 `[Cfet2Event]`。
+- 远程 `SubscribeResource` 返回只确认初始 Get 与本地订阅注册，不等待远端成功 ACK；后续可能进入 Failed，须查询 WebSocket 诊断或日志。初始读取与注册之间不存在原子性保证。
+- EventHub 关闭行为和配置边界以 [Core README](../../README.md) 为准。
+
 本文档用于指导 CFETCore 的逐步升级顺序，并列出每一步需要重点测试的内容。
 
 核心原则：
@@ -548,25 +557,25 @@ remoteRouteTable:
 2. 取消订阅时可能误关共享连接。
 3. 断线重连后远程订阅需要恢复或明确失败。
 
-## 阶段14：新增 CFET2Event 和原生事件路径
+## 阶段14：新增 Cfet2Event 和原生事件路径
 
 目标：
 
-1. 用 `[CFET2Event]` 标识支持原生事件的资源。
+1. 用 `[Cfet2Event]` 标识支持原生事件的资源。
 2. 允许 Thing 自己判断变化并主动发布事件。
 
 升级内容：
 
-1. 新增 `[CFET2Event]` Attribute。
-2. 资源扫描时识别 Status 和 Config 上的 `[CFET2Event]`。
-3. 带 `[CFET2Event]` 的资源走原生事件路径。
-4. Thing 通过 `MyHub.EventHub.Publish(...)` 主动发布本地事件。
+1. 新增 `[Cfet2Event]` Attribute。
+2. 资源扫描时识别 Status 和 Config 上的 `[Cfet2Event]`。
+3. 带 `[Cfet2Event]` 的资源走原生事件路径。
+4. Thing 通过 `MyHub.PublishResource(GetPathFor(nameof(资源成员)), value)` 主动发布资源变化事件。`PublishResource` 默认事件类型为 `changed`；`GetPathFor` 负责把成员名解析为 `[Cfet2Status(Name = "...")]` 或 `[Cfet2Config(Name = "...")]` 声明的对外资源名，并补上当前 Thing 的挂载路径。
 5. Method 资源不支持事件。
 
 测试重点：
 
-1. Status 上标注 `[CFET2Event]` 后可以被识别。
-2. Config 上标注 `[CFET2Event]` 后可以被识别。
+1. Status 上标注 `[Cfet2Event]` 后可以被识别。
+2. Config 上标注 `[Cfet2Event]` 后可以被识别。
 3. Method 上标注事件时应拒绝、忽略或给出明确错误。
 4. Thing 主动 `Publish` 后订阅方可以收到事件。
 5. 事件 source、event type、payload/sample 内容正确。
@@ -574,7 +583,7 @@ remoteRouteTable:
 
 风险点：
 
-1. Attribute 命名必须统一为 `CFET2Event`。
+1. Attribute 命名必须统一为 `Cfet2Event`。
 2. 原生事件由 Thing 自己判断变化，Core 不应重复发布。
 3. 旧 Thing 没有标注该 Attribute，不能因此行为异常。
 
@@ -582,69 +591,93 @@ remoteRouteTable:
 
 目标：
 
-1. 对不带 `[CFET2Event]` 的 Status 和 Config 提供周期观测。
+1. 对不带 `[Cfet2Event]` 的 Status 和 Config 提供周期观测，用于兼容旧 Thing。
 2. 发现资源变化后由 Core 主动发布本地事件。
+3. 资源级订阅建立时先返回一次当前值，后续变化再通过事件推送。
+4. 带 `[Cfet2Event]` 的资源确认由 Thing 自己主动 `Publish`，Core 不观测、不重复发布。
 
 升级内容：
 
 1. 建立内部观测列表。
-2. 订阅不带 `[CFET2Event]` 的资源时，将资源加入观测列表。
-3. 周期调用 `Get` 获取资源当前值。
-4. 比较新旧值，发生变化后调用 `EventHub.Publish`。
-5. 无订阅者后从观测列表移除资源。
+2. 新增资源级订阅入口，返回订阅 Token 和订阅建立时的资源初始值。
+3. 订阅不带 `[Cfet2Event]` 的资源时，将资源加入观测列表，并以初始值作为变化比较基线。
+4. 周期调用 `Get` 获取资源当前值。
+5. 比较新旧值，发生变化后调用 `EventHub.Publish`。
+6. 无订阅者后从观测列表移除资源。
+7. 订阅带 `[Cfet2Event]` 的资源时，只注册 `EventHub` 订阅，不加入观测列表。
+8. 观测周期默认 500ms，可通过 `GlobalConfig.ResourceObservationIntervalMs` 修改；应用侧应在 HubMaster 初始化前完成 `GlobalConfig.Populate(...)` 或设置该值。
+9. `SubscribeResource` 必须先成功获取一次有效 `InitialValue`；初始 `Get` 返回空或 invalid sample 时，订阅入口抛出错误，且不注册事件订阅、不加入观测列表。
 
 测试重点：
 
-1. 不带 `[CFET2Event]` 的 Status 可以被周期观测。
-2. 不带 `[CFET2Event]` 的 Config 可以被周期观测。
+1. 不带 `[Cfet2Event]` 的 Status 可以被周期观测。
+2. 不带 `[Cfet2Event]` 的 Config 可以被周期观测。
 3. Method 不会进入观测列表。
-4. 值未变化时不重复发布事件。
-5. 值变化时只发布预期次数的事件。
-6. 多个订阅者订阅同一资源时只建立一份观测任务。
-7. 所有订阅者取消后观测任务停止。
-8. Get 抛异常时观测任务不会崩溃，并能记录错误。
-9. 慢速 Get 不会阻塞整个事件系统。
-10. 观测周期可配置，并有合理默认值。
+4. 资源级订阅会返回一次当前值。
+5. 初始值不会被当作 `changed` 事件重复推送。
+6. 值未变化时不重复发布事件。
+7. 值变化时只发布预期次数的事件。
+8. 带 `[Cfet2Event]` 的资源不被 Core 观测，只接收 Thing 主动 `Publish`。
+9. 多个订阅者订阅同一资源时只建立一份观测任务。
+10. 所有订阅者取消后观测任务停止。
+11. Get 抛异常时观测任务不会崩溃，并能记录错误。
+12. 慢速 Get 不会阻塞整个事件系统。
+13. 观测周期可配置，并有合理默认值。
 
 风险点：
 
 1. Sample 比较方式不明确会导致误报或漏报。
 2. 高频观测可能带来性能问题。
 3. 观测任务生命周期管理不当会造成后台任务泄漏。
-4. Config 的 Set 后是否立即触发变化事件需要明确。
+4. Config 的 Set 后不会立即由 Set 路径自动发布事件；若资源无 `[Cfet2Event]`，由下一轮内部观测发现变化并发布。
+5. 资源级订阅的初始值是订阅建立过程中的一次快照，不保证严格早于所有随后到达的事件。
 
 ## 阶段16：引入资源级 Subscribe 语义
 
 目标：
 
-1. 将 `Subscribe` 建模为资源动作。
+1. 将 `Subscribe` 建模为独立的资源级订阅 API，不放入 `AccessAction`。
 2. 调用方只表达持续获得变化，不关心事件来源。
+3. 在阶段15本地资源订阅基础上，补齐远程资源订阅与通信模块整合。
 
 升级内容：
 
-1. Status 和 Config 支持 `Subscribe`。
-2. Method 明确不支持 `Subscribe`。
-3. Subscribe 内部根据资源能力选择原生事件路径或内部观测路径。
-4. 对远程资源的 Subscribe 通过 `CommunicationManager` 和 `IEventCommunicationModule` 完成。
-5. 保持旧 `EventHub.Subscribe(...)` 兼容，同时推荐新语义。
+1. 新增推荐入口：`SubscribeResource(string resourceUri, Action<EventArg> handler, string eventType = "changed")`。
+2. `SubscribeResource` 返回 `ResourceSubscription`，其中 `InitialValue` 为 `ISample`，`Token` 负责取消订阅。
+3. `SubscribeResource` 内部先获取初始值，再注册事件订阅，避免调用方设置 `InitialValue` 时覆盖已经到达的事件值。
+4. 保留 `TrySubscribeResourceWithUri(...)` 作为兼容转发入口。
+5. Status 和 Config 支持完整 `Subscribe` 语义。
+6. Method 明确不支持 `Subscribe`。
+7. Subscribe 内部根据资源能力选择原生事件路径或内部观测路径：带 `[Cfet2Event]` 只等 Thing 主动发布，不带 `[Cfet2Event]` 使用内部观测。
+8. 对远程资源的 Subscribe 通过 `CommunicationManager` 获取初始值，并通过 `IEventCommunicationModule` 建立远程事件订阅。
+9. 初始 `Get` 失败时认为资源订阅失败；远程场景下这通常表示资源不可达、协议不可用、资源不存在或网络不通，因此不支持“订阅成功但 `InitialValue` 为 invalid”的半成功状态。
+10. 保持旧 `EventHub.Subscribe(...)` 兼容，同时推荐新语义。
+11. Hub 提供普通事件包装：`Subscribe(EventFilter, Action<EventArg>)`、`Unsubscribe(Token)`、`Publish(string, string, object)` 和 `Publish(EventArg)`，新代码不需要直接持有 `EventHub`。
+12. WebSocketCM 服务端订阅接入 Hub：存在的本地资源走 `SubscribeResource`，不存在的 source 回退普通事件订阅；存在但不可资源订阅的 source 直接拒绝，不回退。
 
 测试重点：
 
-1. 对带 `[CFET2Event]` 的 Status Subscribe，走原生事件路径。
-2. 对不带 `[CFET2Event]` 的 Status Subscribe，走内部观测路径。
-3. 对带 `[CFET2Event]` 的 Config Subscribe，走原生事件路径。
-4. 对不带 `[CFET2Event]` 的 Config Subscribe，走内部观测路径。
+1. 对带 `[Cfet2Event]` 的 Status Subscribe，走原生事件路径。
+2. 对不带 `[Cfet2Event]` 的 Status Subscribe，走内部观测路径。
+3. 对带 `[Cfet2Event]` 的 Config Subscribe，走原生事件路径。
+4. 对不带 `[Cfet2Event]` 的 Config Subscribe，走内部观测路径。
 5. 对 Method Subscribe 返回明确错误。
 6. 本地资源 Subscribe 正常。
 7. 远程资源 Subscribe 正常。
 8. 取消 Subscribe 后本地订阅、远程订阅、内部观测都能清理。
 9. Subscribe 不影响已有 Get、Set、Call。
+10. 初始 `Get` 失败时，SubscribeResource 抛错且不留下本地订阅、远程订阅或内部观测。
+11. `Hub.Subscribe(...)` 可以订阅普通事件，`Hub.Unsubscribe(...)` 可以取消普通事件，`Hub.Publish(...)` 可以发布普通事件。
+12. WebSocketCM 服务端能严格区分资源订阅和普通事件订阅：存在资源保存 `ResourceSubscription`，不存在 source 保存普通 `Token`。
+13. 资源形态 source 的远程订阅断线重连后能重新订阅，订阅数不重复，重连后能继续收到事件。
 
 风险点：
 
 1. 新 Subscribe 语义和旧 EventHub Subscribe 名称相近，需要文档和 API 边界清楚。
 2. 本地订阅、远程订阅、内部观测三种路径的 Token 生命周期要统一。
 3. 同一路径被旧接口和新接口同时订阅时不能重复发布异常事件。
+4. `SubscribeResource` 不走 `TryAccessResourceSampleWithUri(...)`，因为它需要回调和订阅生命周期，而不是单次返回 `ISample`。
+5. `SubscribeResource` 的成功条件是“初始 `Get` 成功 + 事件订阅成功”；任一失败都应作为整体订阅失败处理。
 
 ## 阶段17：清理旧远程事件实现
 
@@ -685,7 +718,7 @@ remoteRouteTable:
 升级内容：
 
 1. 收集现有 Thing 对 `EventHub.Subscribe`、`EventHub.Publish`、资源 Get/Set/Call 的使用方式。
-2. 找出需要标注 `[CFET2Event]` 的资源。
+2. 找出需要标注 `[Cfet2Event]` 的资源。
 3. 找出适合使用内部观测路径的资源。
 4. 记录 statemachine 对 Subscribe 语义的适配点。
 
@@ -694,7 +727,7 @@ remoteRouteTable:
 1. 旧 Thing 不修改代码即可运行。
 2. 旧 Thing 主动发布本地事件行为不变。
 3. 旧 Thing 内部订阅事件行为不变。
-4. 新 Thing 可以使用 `[CFET2Event]` 和新 Subscribe 语义。
+4. 新 Thing 可以使用 `[Cfet2Event]` 和新 Subscribe 语义。
 5. statemachine 订阅状态变化时不会重复触发。
 6. statemachine 取消订阅时资源观测和远程订阅都能释放。
 
@@ -824,8 +857,8 @@ Subscribe 语义：
 10. 增加连接状态事件。
 11. 增加路由表和线程安全能力。
 12. 实现 `HTTPCM` 和 `WebSocketCM`。
-13. 新增 `[CFET2Event]`，实现原生事件路径。
-14. 实现无 `[CFET2Event]` 资源的内部观测路径。
+13. 新增 `[Cfet2Event]`，实现原生事件路径。
+14. 实现无 `[Cfet2Event]` 资源的内部观测路径。
 15. 引入资源级 `Subscribe` 语义。
 16. 清理旧远程事件内部实现，但保留旧外部接口。
 17. 做现有 Thing 和 statemachine 适配测试。

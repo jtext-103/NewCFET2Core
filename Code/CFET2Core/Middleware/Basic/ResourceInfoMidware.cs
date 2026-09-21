@@ -23,6 +23,8 @@ namespace Jtext103.CFET2.Core.Middleware.Basic
         /// </summary>
         public static readonly string ResourceType = "ResourceType";
 
+        public static readonly string SupportsNativeEvent = "SupportsNativeEvent";
+
         /// <summary>
         /// 
         /// </summary>
@@ -42,6 +44,7 @@ namespace Jtext103.CFET2.Core.Middleware.Basic
             var info = resource.Info;
             //translate them
             input.Context.Add(ResourceType, info.Type.ToString());
+            input.Context.Add(SupportsNativeEvent, info.SupportsNativeEvent);
             input.Context.Add(Actions, new Dictionary<string, ActionInfo>());
             var actions = input.Context[Actions] as Dictionary<string, ActionInfo>;
             foreach (var action in info.Implementations)

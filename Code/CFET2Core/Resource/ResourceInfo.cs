@@ -12,6 +12,8 @@ namespace Jtext103.CFET2.Core.Resource
     {
         public ResourceTypes Type { get; set; }
 
+        public bool SupportsNativeEvent { get; set; }
+
         /// <summary>
         /// the implementions of this resource
         /// </summary>

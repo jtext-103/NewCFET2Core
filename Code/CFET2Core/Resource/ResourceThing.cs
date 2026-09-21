@@ -17,6 +17,7 @@ namespace Jtext103.CFET2.Core.Resource
     public class ResourceThing:ResourceBase
     {
         private Dictionary<MemberInfo,Cfet2AttributeBase> thingMembers=new Dictionary<MemberInfo, Cfet2AttributeBase>();
+        private HashSet<MemberInfo> nativeEventMembers = new HashSet<MemberInfo>();
 
         private ICfet2Logger logger = Cfet2LogManager.GetLogger("ResourceThing");
         /// <summary>
@@ -108,12 +109,19 @@ namespace Jtext103.CFET2.Core.Resource
                 throw new BadThingImplementaionException("multiple implementaions for status: " + resName);
             }
             var newStatus = new ResourceStatus(resName,this);
+            newStatus.SupportsNativeEvent = hasNativeEvent(member);
+            markNativeEventHandled(member);
             newStatus.AddImplementation(member);
             Resources[resName] = newStatus;
         }
         
         private void AddToMethod(MemberInfo member)
         {
+            if (hasNativeEvent(member))
+            {
+                throw new BadThingImplementaionException("Cfet2Event can only be used on status or config resources: " + getResourceName(member));
+            }
+
             var resName = getResourceName(member);
             //since method allows only one method implementaition for one resource
             if (Resources.ContainsKey(resName))
@@ -140,6 +148,16 @@ namespace Jtext103.CFET2.Core.Resource
             else if (!(newRes is ResourceConfig))
             {
                 throw new BadThingImplementaionException("multiple implementaions for: " + resName);
+            }
+            if (hasNativeEvent(member))
+            {
+                var attr = member.GetCustomAttribute<Cfet2ConfigAttribute>();
+                if (attr.ConfigActions != ConfigAction.Set && attr.ConfigActions != ConfigAction.GetAndSet)
+                {
+                    throw new BadThingImplementaionException("Cfet2Event on config resources must be used on set implementation: " + resName);
+                }
+                newRes.SupportsNativeEvent = true;
+                markNativeEventHandled(member);
             }
            ((ResourceConfig)newRes).AddImplementation(member);
 
@@ -210,14 +228,35 @@ namespace Jtext103.CFET2.Core.Resource
                     {
                         thingMembers.Add(member, cfetAttr);
                     }
+                    if (attr is Cfet2EventAttribute)
+                    {
+                        nativeEventMembers.Add(member);
+                    }
                 }
 
+            }
+            foreach (var nativeEventMember in nativeEventMembers)
+            {
+                if (!thingMembers.ContainsKey(nativeEventMember))
+                {
+                    throw new BadThingImplementaionException("Cfet2Event must be used with Cfet2Status or Cfet2Config: " + nativeEventMember.Name);
+                }
             }
         }
 
         private string getResourceName(MemberInfo member)
         {
             return string.IsNullOrEmpty(member.GetCustomAttribute<Cfet2AttributeBase>().Name) ? member.Name : member.GetCustomAttribute<Cfet2AttributeBase>().Name;
+        }
+
+        private bool hasNativeEvent(MemberInfo member)
+        {
+            return member.GetCustomAttribute<Cfet2EventAttribute>() != null;
+        }
+
+        private void markNativeEventHandled(MemberInfo member)
+        {
+            nativeEventMembers.Remove(member);
         }
 
         #endregion

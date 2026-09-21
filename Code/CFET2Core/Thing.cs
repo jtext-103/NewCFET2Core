@@ -5,6 +5,8 @@ using System.Text;
 using System.Threading.Tasks;
 using System.IO;
 using System.Threading;
+using System.Reflection;
+using Jtext103.CFET2.Core.Attributes;
 
 namespace Jtext103.CFET2.Core
 {
@@ -60,7 +62,26 @@ namespace Jtext103.CFET2.Core
         /// <returns></returns>
         public string GetPathFor(string resourceName)
         {
-            return Path + @"/" + resourceName;
+            return Path + @"/" + getDeclaredResourceName(resourceName);
+        }
+
+        private string getDeclaredResourceName(string resourceName)
+        {
+            if (string.IsNullOrEmpty(resourceName))
+            {
+                return resourceName;
+            }
+
+            var member = GetType()
+                .GetMember(resourceName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .FirstOrDefault();
+            var attribute = member?.GetCustomAttribute<Cfet2AttributeBase>();
+            if (string.IsNullOrEmpty(attribute?.Name))
+            {
+                return resourceName;
+            }
+
+            return attribute.Name;
         }
     }
 }

@@ -1,4 +1,5 @@
 ﻿using Jtext103.CFET2.Core.Log;
+using Jtext103.CFET2.Core.Resource;
 using Jtext103.CFET2.Core.Sample;
 using System;
 using System.Collections.Concurrent;
@@ -22,19 +23,32 @@ namespace Jtext103.CFET2.Core.Event
         public EventHub()
         {
             logger = Cfet2LogManager.GetLogger("EventHub");
+            resourceObservationManager = new ResourceObservationManager(this);
         }
 
         CancellationTokenSource tokenSource = new CancellationTokenSource();
         CancellationToken cancelToken;
+        private readonly object lifecycleLock = new object();
+        private volatile bool disposed;
+        private Task localLoopTask;
+        private Task remoteLoopTask;
 
         /// <summary>
         /// init the event hub: start the event handling loop
         /// </summary>
         public void Init()
         {
-            cancelToken = tokenSource.Token;
-            Task.Factory.StartNew(() => eventHandleLocalLoop(), cancelToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
-            Task.Factory.StartNew(() => eventHandleRemoteLoop(), cancelToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            lock (lifecycleLock)
+            {
+                ThrowIfDisposed();
+                if (localLoopTask != null)
+                {
+                    return;
+                }
+                cancelToken = tokenSource.Token;
+                localLoopTask = Task.Factory.StartNew(eventHandleLocalLoop, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+                remoteLoopTask = Task.Factory.StartNew(eventHandleRemoteLoop, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            }
         }
 
         /// <summary>
@@ -42,21 +56,17 @@ namespace Jtext103.CFET2.Core.Event
         /// </summary>
         private void eventHandleLocalLoop()
         {
-            while (true)
+            while (!cancelToken.IsCancellationRequested)
             {
                 //block the handling loop untill a new event has come
                 eventPendingLocalEvent.WaitOne();
-                while (pendingLocalEvent.Count > 0)
+                if (cancelToken.IsCancellationRequested)
                 {
-                    if (cancelToken.IsCancellationRequested)
-                    {
-                        return;
-                    }
-                    EventArg eventArg;
-                    if (!pendingLocalEvent.TryDequeue(out eventArg))
-                    {
-                        continue;
-                    }
+                    return;
+                }
+                EventArg eventArg;
+                while (!cancelToken.IsCancellationRequested && pendingLocalEvent.TryDequeue(out eventArg))
+                {
                     handleLocalEvent(eventArg);
                 }
             }
@@ -64,20 +74,16 @@ namespace Jtext103.CFET2.Core.Event
 
         private void eventHandleRemoteLoop()
         {
-            while (true)
+            while (!cancelToken.IsCancellationRequested)
             {
                 eventPendingRemoteEvent.WaitOne();
-                while (pendingRemoteEvent.Count > 0)
+                if (cancelToken.IsCancellationRequested)
                 {
-                    if (cancelToken.IsCancellationRequested)
-                    {
-                        return;
-                    }
-                    EventArg eventArg;
-                    if (!pendingRemoteEvent.TryDequeue(out eventArg))
-                    {
-                        continue;
-                    }
+                    return;
+                }
+                EventArg eventArg;
+                while (!cancelToken.IsCancellationRequested && pendingRemoteEvent.TryDequeue(out eventArg))
+                {
                     handleRemoteEvent(eventArg);
                 }
             }
@@ -97,7 +103,11 @@ namespace Jtext103.CFET2.Core.Event
                 if (tryMatchSubscriber(subscriber, eventArg))
                 {
                     //fire and forget
-                    Task.Run(() => invokeLocalHandlerIfSubscribed(candidate.Key, subscriber, eventArg));
+                    lock (lifecycleLock)
+                    {
+                        if (disposed) return;
+                        Task.Run(() => invokeLocalHandlerIfSubscribed(candidate.Key, subscriber, eventArg));
+                    }
                 }
             }
         }
@@ -119,7 +129,11 @@ namespace Jtext103.CFET2.Core.Event
                     if (tryMatchSubscriber(subscriber, eventArg))
                     {
                         //fire and forget
-                        Task.Run(() => invokeRemoteHandlerIfSubscribed(candidate.Key, subscriber, eventArg));
+                        lock (lifecycleLock)
+                        {
+                            if (disposed) return;
+                            Task.Run(() => invokeRemoteHandlerIfSubscribed(candidate.Key, subscriber, eventArg));
+                        }
                     }
                 }
                 else
@@ -151,6 +165,28 @@ namespace Jtext103.CFET2.Core.Event
 
         private ICfet2Logger logger;
 
+        private ResourceObservationManager resourceObservationManager;
+
+        internal TimeSpan ResourceObservationInterval
+        {
+            get
+            {
+                return resourceObservationManager.ObservationInterval;
+            }
+            set
+            {
+                resourceObservationManager.ObservationInterval = value;
+            }
+        }
+
+        internal int ObservedResourceCount
+        {
+            get
+            {
+                return resourceObservationManager.ObservedResourceCount;
+            }
+        }
+
         /// <summary>
         /// publis a event, not that the payload you are supplying will be wrapped in a status sample if it is not a sample already.
         /// </summary>
@@ -178,8 +214,12 @@ namespace Jtext103.CFET2.Core.Event
                 return;
             }
 
-            pendingLocalEvent.Enqueue(eventArg);
-            newLocalPendingEvent();
+            lock (lifecycleLock)
+            {
+                if (disposed) return;
+                pendingLocalEvent.Enqueue(eventArg);
+                newLocalPendingEvent();
+            }
         }
 
         /// <summary>
@@ -201,8 +241,12 @@ namespace Jtext103.CFET2.Core.Event
                 return;
             }
 
-            pendingRemoteEvent.Enqueue(args);
-            newRemotePendingEvent();
+            lock (lifecycleLock)
+            {
+                if (disposed) return;
+                pendingRemoteEvent.Enqueue(args);
+                newRemotePendingEvent();
+            }
         }
 
         /// <summary>
@@ -230,6 +274,7 @@ namespace Jtext103.CFET2.Core.Event
         [Obsolete]
         public Token Subscribe(EventFilter filter, Action<EventArg> handler)
         {
+            ThrowIfDisposed();
             if (!string.IsNullOrEmpty(filter.Host))
             {
                 filter.Host = NormalizeHost(filter.Host);
@@ -243,12 +288,18 @@ namespace Jtext103.CFET2.Core.Event
                     try
                     {
                         var subscriber = new Subscriber(filter, handler);
-                        lock (remoteSubLock)
+                        lock (lifecycleLock)
                         {
-                            remoteSubDict.Add(remoteToken.Id, subscriber);
-                            addRemoteRoutes(remoteToken.Id, subscriber);
+                            ThrowIfDisposed();
+                            lock (remoteSubLock)
+                            {
+                                remoteSubDict.Add(remoteToken.Id, subscriber);
+                                addRemoteRoutes(remoteToken.Id, subscriber);
+                            }
                         }
                         eventModule.Subscribe(remoteToken, filter);
+                        // A remote call may finish after shutdown; do not leave that late subscription alive.
+                        if (disposed) eventModule.UnSubScribe(remoteToken);
                     }
                     catch
                     {
@@ -271,12 +322,42 @@ namespace Jtext103.CFET2.Core.Event
             //sub local event
             var token = new Token(this);
             var localSubscriber = new Subscriber(filter, handler);
-            lock (localSubLock)
+            lock (lifecycleLock)
             {
-                localSubDict.Add(token.Id, localSubscriber);
-                addLocalRoutes(token.Id, localSubscriber);
+                ThrowIfDisposed();
+                lock (localSubLock)
+                {
+                    localSubDict.Add(token.Id, localSubscriber);
+                    addLocalRoutes(token.Id, localSubscriber);
+                }
             }
             return token;
+        }
+
+        internal void ObserveResource(Token token, ResourceBase resource, ISample initialSample)
+        {
+            resourceObservationManager.Observe(token, resource, initialSample);
+        }
+
+        internal bool IsSubscribed(Token token)
+        {
+            if (token == null || disposed)
+            {
+                return false;
+            }
+
+            if (token.IsRemote)
+            {
+                lock (remoteSubLock)
+                {
+                    return remoteSubDict.ContainsKey(token.Id);
+                }
+            }
+
+            lock (localSubLock)
+            {
+                return localSubDict.ContainsKey(token.Id);
+            }
         }
 
         /// <summary>
@@ -286,6 +367,11 @@ namespace Jtext103.CFET2.Core.Event
         [Obsolete]
         public void Unsubscribe(Token token)
         {
+            if (token == null || disposed)
+            {
+                return;
+            }
+
             if (token.IsRemote)
             {
                 var remoteEventCM = HubMaster.getInstance().MyCommunicationManager.GetModuleForEvent(token.Protocol);
@@ -324,6 +410,7 @@ namespace Jtext103.CFET2.Core.Event
                 }
                 localSubDict.Remove(token.Id);
             }
+            resourceObservationManager.Unobserve(token);
         }
 
         /// <summary>
@@ -331,6 +418,21 @@ namespace Jtext103.CFET2.Core.Event
         /// </summary>
         public void Dispose()
         {
+            Task loops;
+            bool calledFromLoop;
+            lock (lifecycleLock)
+            {
+                if (disposed) return;
+                disposed = true;
+                tokenSource.Cancel();
+                newLocalPendingEvent();
+                newRemotePendingEvent();
+                loops = Task.WhenAll(localLoopTask ?? Task.CompletedTask, remoteLoopTask ?? Task.CompletedTask);
+                calledFromLoop = Task.CurrentId.HasValue &&
+                    (Task.CurrentId == localLoopTask?.Id || Task.CurrentId == remoteLoopTask?.Id);
+            }
+
+            resourceObservationManager.Dispose();
             lock (localSubLock)
             {
                 localSubDict.Clear();
@@ -343,12 +445,47 @@ namespace Jtext103.CFET2.Core.Event
                 remoteRouteTable.Clear();
                 remoteFallbackRoutes.Clear();
             }
-            pendingLocalEvent = new ConcurrentQueue<EventArg>();
-            pendingRemoteEvent = new ConcurrentQueue<EventArg>();
-            tokenSource.Cancel();
-            //unblock the loop
-            newLocalPendingEvent();
-            newRemotePendingEvent();
+            // Never wait under a subscription/lifecycle lock or wait for user handlers.
+            // A pathological filter/logger must not block shutdown indefinitely.
+            if (!calledFromLoop)
+            {
+                try
+                {
+                    if (loops.Wait(TimeSpan.FromSeconds(5)))
+                    {
+                        ReleaseLoopResources();
+                        return;
+                    }
+                }
+                catch (AggregateException ex)
+                {
+                    ReleaseLoopResources();
+                    logger.Error($"Event loops stopped with an error: {ex.Flatten().Message}");
+                    return;
+                }
+            }
+
+            loops.ContinueWith(completed =>
+            {
+                var error = completed.Exception;
+                ReleaseLoopResources();
+                if (error != null) logger.Error($"Event loops stopped with an error: {error.Flatten().Message}");
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            if (!calledFromLoop) logger.Warn("Event loops did not stop within 5 seconds; resources will be released when they exit.");
+        }
+
+        private void ReleaseLoopResources()
+        {
+            while (pendingLocalEvent.TryDequeue(out _)) { }
+            while (pendingRemoteEvent.TryDequeue(out _)) { }
+            eventPendingLocalEvent.Dispose();
+            eventPendingRemoteEvent.Dispose();
+            tokenSource.Dispose();
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (disposed) throw new ObjectDisposedException(nameof(EventHub));
         }
 
         /// <summary>
@@ -440,6 +577,7 @@ namespace Jtext103.CFET2.Core.Event
 
         private void invokeLocalHandlerIfSubscribed(Guid tokenId, Subscriber subscriber, EventArg eventArg)
         {
+            if (disposed) return;
             lock (localSubLock)
             {
                 if (!localSubDict.ContainsKey(tokenId))
@@ -453,6 +591,7 @@ namespace Jtext103.CFET2.Core.Event
 
         private void invokeRemoteHandlerIfSubscribed(Guid tokenId, Subscriber subscriber, EventArg eventArg)
         {
+            if (disposed) return;
             lock (remoteSubLock)
             {
                 if (!remoteSubDict.ContainsKey(tokenId))

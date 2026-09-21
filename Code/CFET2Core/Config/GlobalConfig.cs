@@ -9,11 +9,15 @@ namespace Jtext103.CFET2.Core.Config
     public static class GlobalConfig
     {
         private const int DefaultLogRetentionDays = 7;
+        private const int DefaultResourceObservationIntervalMs = 500;
+        private const int DefaultWebSocketResubscribeIntervalMs = 10;
 
         public static string IP { get; set; }
         public static string Port { get; set; }
         public static string Accept { get; set; }
         public static int LogRetentionDays { get; set; } = DefaultLogRetentionDays;
+        public static int ResourceObservationIntervalMs { get; set; } = DefaultResourceObservationIntervalMs;
+        public static int WebSocketResubscribeIntervalMs { get; set; } = DefaultWebSocketResubscribeIntervalMs;
         public static Uri HostUri
         {
             get
@@ -43,6 +47,24 @@ namespace Jtext103.CFET2.Core.Config
                 {
                     LogRetentionDays = DefaultLogRetentionDays;
                 }
+
+                if (configDict.TryGetValue("ResourceObservationIntervalMs", out var intervalRaw))
+                {
+                    ResourceObservationIntervalMs = ParseResourceObservationIntervalMs(intervalRaw);
+                }
+                else
+                {
+                    ResourceObservationIntervalMs = DefaultResourceObservationIntervalMs;
+                }
+
+                if (configDict.TryGetValue("WebSocketResubscribeIntervalMs", out var resubscribeIntervalRaw))
+                {
+                    WebSocketResubscribeIntervalMs = ParseWebSocketResubscribeIntervalMs(resubscribeIntervalRaw);
+                }
+                else
+                {
+                    WebSocketResubscribeIntervalMs = DefaultWebSocketResubscribeIntervalMs;
+                }
             }
             catch (System.Exception e)
             {
@@ -56,6 +78,8 @@ namespace Jtext103.CFET2.Core.Config
             configDict.Add("Port", Port);
             configDict.Add("Accept", Accept);
             configDict.Add("LogRetentionDays", LogRetentionDays.ToString());
+            configDict.Add("ResourceObservationIntervalMs", ResourceObservationIntervalMs.ToString());
+            configDict.Add("WebSocketResubscribeIntervalMs", WebSocketResubscribeIntervalMs.ToString());
             return configDict;
         }
 
@@ -73,6 +97,24 @@ namespace Jtext103.CFET2.Core.Config
                 else
                 {
                     LogRetentionDays = DefaultLogRetentionDays;
+                }
+
+                if (configDict.TryGetValue("ResourceObservationIntervalMs", out var intervalRaw))
+                {
+                    ResourceObservationIntervalMs = ParseResourceObservationIntervalMs(intervalRaw);
+                }
+                else
+                {
+                    ResourceObservationIntervalMs = DefaultResourceObservationIntervalMs;
+                }
+
+                if (configDict.TryGetValue("WebSocketResubscribeIntervalMs", out var resubscribeIntervalRaw))
+                {
+                    WebSocketResubscribeIntervalMs = ParseWebSocketResubscribeIntervalMs(resubscribeIntervalRaw);
+                }
+                else
+                {
+                    WebSocketResubscribeIntervalMs = DefaultWebSocketResubscribeIntervalMs;
                 }
             }
             catch (System.Exception e)
@@ -97,6 +139,39 @@ namespace Jtext103.CFET2.Core.Config
             }
 
             return DefaultLogRetentionDays;
+        }
+
+        private static int ParseResourceObservationIntervalMs(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return DefaultResourceObservationIntervalMs;
+            }
+
+            if (int.TryParse(value, out var milliseconds))
+            {
+                if (milliseconds > 0)
+                {
+                    return milliseconds;
+                }
+            }
+
+            return DefaultResourceObservationIntervalMs;
+        }
+
+        private static int ParseWebSocketResubscribeIntervalMs(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return DefaultWebSocketResubscribeIntervalMs;
+            }
+
+            if (int.TryParse(value, out var milliseconds) && milliseconds >= 0)
+            {
+                return milliseconds;
+            }
+
+            return DefaultWebSocketResubscribeIntervalMs;
         }
     }
 }

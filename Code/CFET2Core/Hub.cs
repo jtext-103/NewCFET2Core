@@ -72,6 +72,26 @@ namespace Jtext103.CFET2.Core
             }
         }
 
+        internal TimeSpan ResourceObservationInterval
+        {
+            get
+            {
+                return myMaster.MyEventHub.ResourceObservationInterval;
+            }
+            set
+            {
+                myMaster.MyEventHub.ResourceObservationInterval = value;
+            }
+        }
+
+        internal int ObservedResourceCount
+        {
+            get
+            {
+                return myMaster.MyEventHub.ObservedResourceCount;
+            }
+        }
+
         #endregion
 
        
@@ -223,6 +243,154 @@ namespace Jtext103.CFET2.Core
         }
 
 
+
+        #endregion
+
+        #region subscribe event
+
+        /// <summary>
+        /// Subscribe to a normal event. Resource-level subscriptions should use SubscribeResource.
+        /// </summary>
+        public Token Subscribe(EventFilter filter, Action<EventArg> handler)
+        {
+#pragma warning disable CS0612
+            return myMaster.MyEventHub.Subscribe(filter, handler);
+#pragma warning restore CS0612
+        }
+
+        /// <summary>
+        /// Unsubscribe from a normal event subscription.
+        /// </summary>
+        public void Unsubscribe(Token token)
+        {
+#pragma warning disable CS0612
+            myMaster.MyEventHub.Unsubscribe(token);
+#pragma warning restore CS0612
+        }
+
+        /// <summary>
+        /// Publish a normal local event. The payload will be wrapped in a status sample if it is not already a sample.
+        /// </summary>
+        public void Publish(string source, string eventType, object payload)
+        {
+#pragma warning disable CS0612
+            myMaster.MyEventHub.Publish(source, eventType, payload);
+#pragma warning restore CS0612
+        }
+
+        /// <summary>
+        /// Publish a normal local event.
+        /// </summary>
+        public void Publish(EventArg eventArg)
+        {
+#pragma warning disable CS0612
+            myMaster.MyEventHub.Publish(eventArg);
+#pragma warning restore CS0612
+        }
+
+        /// <summary>
+        /// Publish a changed event for a resource.
+        /// </summary>
+        public void PublishResource(string resourcePath, object value)
+        {
+            Publish(resourcePath, "changed", value);
+        }
+
+        #endregion
+
+        #region subscribe resource
+
+        public ResourceSubscription SubscribeResource(string resourceUri, Action<EventArg> handler, string eventType = "changed")
+        {
+            var uri = new Uri(resourceUri, UriKind.RelativeOrAbsolute);
+            if (IsRemoteUri(uri))
+            {
+                return subscribeRemoteResource(resourceUri, uri, handler, eventType);
+            }
+
+            var resource = FindLocalResourceWithPath(resourceUri);
+            if (resource == null)
+            {
+                throw new ResourceDoesNotExistException();
+            }
+
+            if (resource.ResourceType != ResourceTypes.Status && resource.ResourceType != ResourceTypes.Config)
+            {
+                throw new WrongResourceActionException("SubscribeResource only supports Status and Config resources: " + resource.Path);
+            }
+
+            if (!resource.SupportsNativeEvent && !string.Equals(eventType, "changed", StringComparison.InvariantCultureIgnoreCase))
+            {
+                throw new WrongResourceActionException("Observed resources without Cfet2Event only support changed event: " + resource.Path);
+            }
+
+            if (!resource.SupportsNativeEvent)
+            {
+                ResourceObservationTypePolicy.EnsureSupported(resource);
+            }
+
+            var initialValue = resource.Get() as ISample;
+            ensureValidSubscribeInitialValue(initialValue, resource.Path);
+
+            var filter = new EventFilter(resource.Path, eventType);
+            var token = Subscribe(filter, handler);
+            try
+            {
+                if (!resource.SupportsNativeEvent)
+                {
+                    myMaster.MyEventHub.ObserveResource(token, resource, initialValue);
+                }
+                return new ResourceSubscription(token, initialValue);
+            }
+            catch
+            {
+                Unsubscribe(token);
+                throw;
+            }
+        }
+
+        private ResourceSubscription subscribeRemoteResource(string resourceUri, Uri uri, Action<EventArg> handler, string eventType)
+        {
+            if (myMaster.MyCommunicationManager.GetModuleFor(uri.Scheme) == null)
+            {
+                throw new ProtocolNotSuportedException($"{uri.Scheme} is not supported");
+            }
+
+            if (myMaster.MyCommunicationManager.GetModuleForEvent(uri.Scheme) == null)
+            {
+                throw new ProtocolNotSuportedException($"{uri.Scheme} event is not supported");
+            }
+
+            var initialValue = TryGetResourceSampleWithUri(resourceUri);
+            ensureValidSubscribeInitialValue(initialValue, resourceUri);
+            if (initialValue.ResourceType != ResourceTypes.Status && initialValue.ResourceType != ResourceTypes.Config)
+            {
+                throw new WrongResourceActionException("SubscribeResource only supports Status and Config resources: " + resourceUri);
+            }
+
+            var filter = new EventFilter(resourceUri, eventType);
+            var token = Subscribe(filter, handler);
+            if (!myMaster.MyEventHub.IsSubscribed(token))
+            {
+                Unsubscribe(token);
+                throw new BadResourceRequestException("SubscribeResource event subscribe failed: " + resourceUri);
+            }
+
+            return new ResourceSubscription(token, initialValue);
+        }
+
+        private static void ensureValidSubscribeInitialValue(ISample initialValue, string resourcePath)
+        {
+            if (initialValue == null || !initialValue.IsValid)
+            {
+                throw new BadResourceRequestException("SubscribeResource initial get failed: " + resourcePath);
+            }
+        }
+
+        public ResourceSubscription TrySubscribeResourceWithUri(string resourceUri, string eventType, Action<EventArg> handler)
+        {
+            return SubscribeResource(resourceUri, handler, eventType);
+        }
 
         #endregion
 
