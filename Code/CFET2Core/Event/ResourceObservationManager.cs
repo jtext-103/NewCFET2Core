@@ -150,6 +150,7 @@ namespace Jtext103.CFET2.Core.Event
                     }
 
                     var current = observation.Resource.Get() as ISample;
+                    var observedAt = DateTimeOffset.UtcNow;
                     if (current == null || !current.IsValid)
                     {
                         continue;
@@ -173,7 +174,10 @@ namespace Jtext103.CFET2.Core.Event
 
                     if (changed)
                     {
-                        eventHub.Publish(observation.Resource.Path, "changed", currentValue);
+                        var sample = new Status<object>(current.Context);
+                        sample.Context[SampleBase<object>.KeyOfVal] = currentValue;
+                        sample.Timestamp = current.Timestamp ?? observedAt;
+                        eventHub.Publish(observation.Resource.Path, "changed", sample);
                     }
                 }
                 catch (TaskCanceledException)

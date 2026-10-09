@@ -44,6 +44,12 @@ namespace Jtext103.CFET2.Core.Sample
         bool IsRemote { get; set; }
 
         /// <summary>
+        /// Source change time in UTC, or null when unknown. Local publication fills a missing
+        /// timestamp; reading, copying and receiving a sample never invent a change time.
+        /// </summary>
+        DateTimeOffset? Timestamp { get; set; }
+
+        /// <summary>
         /// add an error message to the sample, indicating what's wrong with this sample. 
         /// one called, the sample became invalid
         /// </summary>

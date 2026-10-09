@@ -208,6 +208,7 @@ namespace Jtext103.CFET2.Core.Event
         [Obsolete]
         public void Publish(EventArg eventArg)
         {
+            var publishedAt = DateTimeOffset.UtcNow;
             if (eventArg == null)
             {
                 logger.Warn("local event args is null");
@@ -217,7 +218,24 @@ namespace Jtext103.CFET2.Core.Event
             lock (lifecycleLock)
             {
                 if (disposed) return;
-                pendingLocalEvent.Enqueue(eventArg);
+                // Freeze event metadata and the context, without stamping the caller's sample.
+                // Reusing an unstamped sample for another publication must get a fresh time.
+                ISample sample = null;
+                if (eventArg.Sample != null)
+                {
+                    sample = new SampleBase<object>(eventArg.Sample.Context);
+                    // Preserve the source sample's evaluated value, including generic conversion.
+                    sample.Context[SampleBase<object>.KeyOfVal] = eventArg.Sample.ObjectVal;
+                    sample.Timestamp = eventArg.Sample.Timestamp ?? publishedAt;
+                }
+                pendingLocalEvent.Enqueue(new EventArg
+                {
+                    Source = eventArg.Source,
+                    EventType = eventArg.EventType,
+                    Host = eventArg.Host,
+                    PerformanceLevel = eventArg.PerformanceLevel,
+                    Sample = sample,
+                });
                 newLocalPendingEvent();
             }
         }

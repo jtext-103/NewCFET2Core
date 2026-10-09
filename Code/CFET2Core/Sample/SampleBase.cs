@@ -1,6 +1,7 @@
 ﻿using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -61,6 +62,7 @@ namespace Jtext103.CFET2.Core.Sample
         public static readonly string KeyOfParametersList = "CFET2CORE_SAMPLE_PARAMETERSLIST";
         public static readonly string KeyOfResourceType = "CFET2CORE_SAMPLE_RESOURCETYPE";
         public static readonly string KeyOfIsRemote = "CFET2CORE_SAMPLE_ISREMOTE";
+        public static readonly string KeyOfTimestamp = "CFET2CORE_SAMPLE_TIMESTAMP";
 
         /// <summary>
         /// return an invalid sample
@@ -89,6 +91,36 @@ namespace Jtext103.CFET2.Core.Sample
 
 
         #region context property
+
+        /// <summary>
+        /// Source change time, normalized to UTC. The context stores an ISO 8601 round-trip
+        /// string so JSON and MessagePack preserve the same instant and precision.
+        /// Missing or malformed timestamps are unknown, not the time of receipt.
+        /// </summary>
+        public DateTimeOffset? Timestamp
+        {
+            get
+            {
+                if (!Context.TryGetValue(KeyOfTimestamp, out var raw) || raw == null)
+                    return null;
+                if (raw is DateTimeOffset offset)
+                    return offset.ToUniversalTime();
+                if (raw is DateTime date)
+                    return new DateTimeOffset(date.Kind == DateTimeKind.Unspecified
+                        ? DateTime.SpecifyKind(date, DateTimeKind.Utc) : date).ToUniversalTime();
+                if (raw is string text && DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed))
+                    return parsed;
+                return null;
+            }
+            set
+            {
+                if (value.HasValue)
+                    Context[KeyOfTimestamp] = value.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+                else
+                    Context.Remove(KeyOfTimestamp);
+            }
+        }
 
 
 
