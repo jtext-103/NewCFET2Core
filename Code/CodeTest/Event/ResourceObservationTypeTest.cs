@@ -63,11 +63,21 @@ namespace Jtext103.CFET2.Core.Test.Event
         }
 
         [TestMethod]
+        public void ContainerDeclarationsShouldSupportPropertiesAndMethods()
+        {
+            var types = new[] { typeof(int[]), typeof(int?[,]), typeof(string[][]), typeof(List<string>),
+                typeof(List<int?>), typeof(Dictionary<string, int[]>), typeof(Dictionary<int?, string>),
+                typeof(List<Dictionary<string, List<DateTimeOffset?>>>) };
+            for (int index = 0; index < types.Length; index++) AssertSupported(types[index], index);
+            Assert.AreEqual(0, CountObservations());
+        }
+
+        [TestMethod]
         public void ComplexAndAmbiguousDeclarationsShouldRejectBeforeGetterOrSubscription()
         {
-            var types = new[] { typeof(int[]), typeof(List<int>), typeof(Dictionary<string, int>),
+            var types = new[] { typeof(ComplexValue[]), typeof(List<ComplexValue>), typeof(Dictionary<string, ComplexValue>),
                 typeof(ComplexValue), typeof(ComplexStruct), typeof(object), typeof(ISample),
-                typeof(Status<int[]>), typeof(SampleBase<object>) };
+                typeof(Status<object[]>), typeof(SampleBase<object>), typeof(List<object>), typeof(Dictionary<ComplexValue, int>) };
             for (int index = 0; index < types.Length; index++)
             {
                 var thing = (Thing)Activator.CreateInstance(typeof(RejectedThing<>).MakeGenericType(types[index]));
@@ -142,7 +152,8 @@ namespace Jtext103.CFET2.Core.Test.Event
             var replacement = new[] { 4, 5 };
             Assert.IsTrue(((ISample)resource.Set(new object[] { replacement })).IsValid);
             Assert.AreSame(replacement, ((ISample)resource.Get()).ObjectVal);
-            Assert.ThrowsExactly<WrongResourceActionException>(() => MyHub.SubscribeResource("/complex/Value", _ => { }));
+            using (var observed = MyHub.SubscribeResource("/complex/Value", _ => { }))
+                Assert.AreEqual(1, CountObservations());
             var values = new ConcurrentQueue<object>();
             using var subscription = MyHub.SubscribeResource("/complex/Native", e => values.Enqueue(e.Sample.ObjectVal));
             Assert.AreEqual(0, CountObservations());

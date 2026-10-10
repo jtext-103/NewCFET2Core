@@ -25,6 +25,7 @@ namespace Jtext103.CFET2.Core
         {
             //todo depending on the module types disable some function of the hub
             MyCfet2Module = module;
+            publicationMaster = HubMaster.getInstance();
         }
 
 

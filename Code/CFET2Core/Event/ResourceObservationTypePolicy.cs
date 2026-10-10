@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using Jtext103.CFET2.Core.Exception;
 using Jtext103.CFET2.Core.Resource;
@@ -10,11 +11,27 @@ namespace Jtext103.CFET2.Core.Event
     {
         public static void EnsureSupported(ResourceBase resource)
         {
+            var declaredType = GetDeclaredType(resource);
+            var valueType = GetValueType(resource);
+            if (SupportsValue(valueType)) return;
+            throw new WrongResourceActionException(
+                $"Resource '{resource.Path}' with declared type '{declaredType}' " +
+                $"does not support automatic observation (value type: '{valueType?.ToString() ?? "unknown"}'). " +
+                "Return a supported scalar, array, List<T> or Dictionary<TKey, TValue>, or use [Cfet2Event] and publish changes explicitly from the Thing.");
+        }
+
+        private static Type GetDeclaredType(ResourceBase resource)
+        {
             MemberInfo getter;
             resource.Info.Implementations.TryGetValue(AccessAction.get, out getter);
-            var declaredType = getter is PropertyInfo property
+            return getter is PropertyInfo property
                 ? property.PropertyType
                 : (getter as MethodInfo)?.ReturnType;
+        }
+
+        internal static Type GetValueType(ResourceBase resource)
+        {
+            var declaredType = GetDeclaredType(resource);
             var valueType = declaredType;
 
             if (declaredType != null && typeof(ISample).IsAssignableFrom(declaredType))
@@ -33,16 +50,15 @@ namespace Jtext103.CFET2.Core.Event
             if (valueType != null)
                 valueType = Nullable.GetUnderlyingType(valueType) ?? valueType;
 
-            if (valueType != null && IsScalar(valueType))
-                return;
-
-            throw new WrongResourceActionException(
-                $"Resource '{resource.Path}' with declared type '{declaredType}' " +
-                $"does not support automatic observation (value type: '{valueType?.ToString() ?? "unknown"}'). " +
-                "Return a supported scalar type, or use [Cfet2Event] and publish changes explicitly from the Thing.");
+            return valueType;
         }
 
-        private static bool IsScalar(Type type)
+        internal static bool SupportsValue(Type type)
+        {
+            return type != null && ValueTypeValidation.Get(type).Unsupported == null;
+        }
+
+        internal static bool IsScalar(Type type)
         {
             return type.IsEnum || type == typeof(bool) || type == typeof(char) ||
                 type == typeof(byte) || type == typeof(sbyte) ||

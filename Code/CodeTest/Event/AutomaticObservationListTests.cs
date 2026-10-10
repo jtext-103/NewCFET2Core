@@ -51,6 +51,42 @@ namespace Jtext103.CFET2.Core.Test.Event
         }
 
         [TestMethod]
+        public void ContainersRemainResidentAndBlacklistStillAllowsActivePublication()
+        {
+            GlobalConfig.ResourceObservationIntervalMs = 20;
+            GlobalConfig.AutoDenyList = new[] { Exact("/containers/Denied") };
+            CreateHost(Pattern("/containers/.*"));
+            var device = new ContainerDevice();
+            MyHub.TryAddThing(device, "/", "containers");
+            MyHub.StartThings();
+            Assert.AreEqual(3, ObservedCount);
+            Assert.AreEqual(ResourceObservationStatus.Skipped, MyHub.AutoObservationResults.Single(r => r.ResourcePath == "/containers/Denied").Status);
+            var events = new ConcurrentQueue<EventArg>();
+            using (var subscription = MyHub.SubscribeResources(new EventFilter("/containers/.*", "changed"), events.Enqueue))
+            {
+                Assert.AreEqual(3, subscription.ObservationResults.Count(r => r.Status == ResourceObservationStatus.Shared));
+                device.Array[0] = 2;
+                device.List[0] = 2;
+                device.Dictionary["a"] = 2;
+                Eventually(() => events.Count == 3);
+                MyHub.PublishResource("/containers/Denied", new[] { 9 });
+                Eventually(() => events.Count == 4);
+            }
+            Assert.AreEqual(3, ObservedCount);
+            using var listener = MyHub.Subscribe(new EventFilter("/containers/Array", "changed"), events.Enqueue);
+            device.Array[0] = 3;
+            Eventually(() => events.Count == 5);
+        }
+
+        public class ContainerDevice : Thing
+        {
+            [Cfet2Status] public int[] Array { get; } = new[] { 1 };
+            [Cfet2Status] public List<int> List { get; } = new List<int> { 1 };
+            [Cfet2Config] public Dictionary<string, int> Dictionary { get; set; } = new Dictionary<string, int> { ["a"] = 1 };
+            [Cfet2Status] public int[] Denied { get; } = new[] { 1 };
+        }
+
+        [TestMethod]
         public void FileArraysAndDictionaryRoundTripPreserveRulesAndLegacyDefaults()
         {
             var file = Path.GetTempFileName();
@@ -322,7 +358,7 @@ namespace Jtext103.CFET2.Core.Test.Event
             [Cfet2Status, Cfet2Event] public int Native { get { IneligibleReads++; return 0; } }
             [Cfet2Status] public int Required(int channel) { IneligibleReads++; return channel; }
             [Cfet2Status] public int Default(int channel = 7) { LastDefault = channel; return channel; }
-            [Cfet2Status] public int[] Complex { get { IneligibleReads++; return new[] { 1 }; } }
+            [Cfet2Status] public object[] Complex { get { IneligibleReads++; return new object[] { 1 }; } }
             [Cfet2Method] public void Action() { }
             public override void Start() { Started = true; }
             public void Dispose() { OnDispose?.Invoke(); Disposed = true; }

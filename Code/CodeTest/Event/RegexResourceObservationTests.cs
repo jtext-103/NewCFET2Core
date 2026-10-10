@@ -415,7 +415,7 @@ namespace Jtext103.CFET2.Core.Test.Event
             [Cfet2Config] public int Pressure { get; set; } = 2;
             [Cfet2Status] public int Broken { get { Interlocked.Increment(ref BrokenReads); if (Fail) throw new InvalidOperationException("Not readable yet"); return TemperatureValue; } }
             [Cfet2Status, Cfet2Event] public int Native { get { Interlocked.Increment(ref NativeReads); return 0; } }
-            [Cfet2Status] public int[] Complex { get { Interlocked.Increment(ref UnsupportedReads); return new[] { 1 }; } }
+            [Cfet2Status] public object[] Complex { get { Interlocked.Increment(ref UnsupportedReads); return new object[] { 1 }; } }
             [Cfet2Status] public int NeedsInput(int input) { Interlocked.Increment(ref UnsupportedReads); return input; }
             [Cfet2Method] public void Action() { }
             public override void Start() { Started = true; }

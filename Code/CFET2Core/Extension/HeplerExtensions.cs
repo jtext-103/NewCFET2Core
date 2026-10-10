@@ -129,6 +129,11 @@ namespace Jtext103.CFET2.Core.Extension
             {
                 if (i >= inputs.Count())
                 {
+                    if (i == methodParameters.Length - 1 && methodParameters[i].IsDefined(typeof(ParamArrayAttribute), false))
+                    {
+                        outputList.Add(Array.CreateInstance(methodParameters[i].ParameterType.GetElementType(), 0));
+                        continue;
+                    }
                     //use default parameters
                     if (methodParameters[i].HasDefaultValue)
                     {

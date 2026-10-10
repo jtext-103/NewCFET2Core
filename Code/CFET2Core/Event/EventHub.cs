@@ -213,16 +213,21 @@ namespace Jtext103.CFET2.Core.Event
         [Obsolete]
         public void Publish(EventArg eventArg)
         {
+            TryPublish(eventArg);
+        }
+
+        internal bool TryPublish(EventArg eventArg)
+        {
             var publishedAt = DateTimeOffset.UtcNow;
             if (eventArg == null)
             {
                 logger.Warn("local event args is null");
-                return;
+                return false;
             }
 
             lock (lifecycleLock)
             {
-                if (disposed) return;
+                if (disposed) return false;
                 // Freeze event metadata and the context, without stamping the caller's sample.
                 // Reusing an unstamped sample for another publication must get a fresh time.
                 ISample sample = null;
@@ -242,6 +247,7 @@ namespace Jtext103.CFET2.Core.Event
                     Sample = sample,
                 });
                 newLocalPendingEvent();
+                return true;
             }
         }
 
@@ -520,6 +526,7 @@ namespace Jtext103.CFET2.Core.Event
             {
                 if (disposed) return;
                 disposed = true;
+                publicationSlots.Clear();
                 tokenSource.Cancel();
                 newLocalPendingEvent();
                 newRemotePendingEvent();

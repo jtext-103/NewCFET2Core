@@ -23,7 +23,7 @@ namespace Jtext103.CFET2.Core.Event
         private sealed class ResourceObservation
         {
             public ResourceBase Resource;
-            public object LastValue;
+            public ResourceValueSnapshot LastValue;
             public readonly Dictionary<Guid, ObservationHandle> Handles = new Dictionary<Guid, ObservationHandle>();
             public readonly CancellationTokenSource Cancellation = new CancellationTokenSource();
             public Task ObserveTask { get; set; }
@@ -63,7 +63,7 @@ namespace Jtext103.CFET2.Core.Event
                 }
 
                 // Never execute device code with the manager/state lock held.
-                object initialValue = null;
+                ResourceValueSnapshot initialValue = null;
                 string failure = null;
                 try
                 {
@@ -71,7 +71,7 @@ namespace Jtext103.CFET2.Core.Event
                     if (sample == null || !sample.IsValid)
                         failure = "Initial read returned an invalid sample.";
                     else
-                        initialValue = sample.ObjectVal;
+                        initialValue = ResourceValueComparison.Capture(ResourceObservationTypePolicy.GetValueType(resource), sample.ObjectVal);
                 }
                 catch (System.Exception ex) { failure = "Initial read failed: " + ex.Message; }
 
@@ -148,17 +148,17 @@ namespace Jtext103.CFET2.Core.Event
                             var current = SlowResourceReadMonitor.Measure(observation.Resource.Path, "poll", () => observation.Resource.Get() as ISample);
                             var observedAt = DateTimeOffset.UtcNow;
                             if (current == null || !current.IsValid) continue;
-                            var value = current.ObjectVal;
+                            var value = ResourceValueComparison.Capture(ResourceObservationTypePolicy.GetValueType(observation.Resource), current.ObjectVal);
+                            if (!ResourceValueComparison.HasChanged(observation.LastValue, value)) continue;
                             var sample = new Status<object>(current.Context);
-                            sample.Context[SampleBase<object>.KeyOfVal] = value;
+                            sample.Context[SampleBase<object>.KeyOfVal] = value.CreateEventValue();
                             sample.Timestamp = current.Timestamp ?? observedAt;
                             lock (sync)
                             {
                                 if (!IsCurrent(slot, observation)) return;
-                                if (object.Equals(observation.LastValue, value)) continue;
-                                observation.LastValue = value;
                                 // Publish enqueues only; user handlers execute outside this lock.
-                                eventHub.Publish(observation.Resource.Path, "changed", sample);
+                                if (eventHub.TryPublish(new EventArg(observation.Resource.Path, "changed", sample)))
+                                    observation.LastValue = value;
                             }
                         }
                     }

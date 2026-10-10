@@ -65,6 +65,15 @@ namespace Jtext103.CFET2.Core
             return Path + @"/" + getDeclaredResourceName(resourceName);
         }
 
+        /// <summary>Publishes changed when the value differs from this path's last publication.
+        /// First values publish. True means accepted locally, not delivered remotely.</summary>
+        public bool PublishResourceIfChanged<T>(string resourceName, T value, object[] parameters = null,
+            DateTimeOffset? timestamp = null)
+        {
+            if (MyHub == null) throw new InvalidOperationException("Thing must be registered before publishing.");
+            return MyHub.PublishThingResourceIfChanged(this, resourceName, value, parameters, timestamp);
+        }
+
         private string getDeclaredResourceName(string resourceName)
         {
             if (string.IsNullOrEmpty(resourceName))
