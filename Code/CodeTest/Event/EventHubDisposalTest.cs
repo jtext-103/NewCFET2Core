@@ -188,10 +188,15 @@ namespace Jtext103.CFET2.Core.Test.Event
                 Assert.IsTrue(thing.Entered.Wait(TimeSpan.FromSeconds(3)));
                 var hub = host.MyHub.EventHub;
                 var manager = Field<object>(hub, "resourceObservationManager");
-                var observations = Field<IDictionary>(manager, "observations");
+                var slots = Field<IDictionary>(manager, "slots");
                 Task observeTask = null;
-                foreach (var observation in observations.Values)
+                foreach (var slot in slots.Values)
+                {
+                    var observation = slot.GetType().GetField("Current").GetValue(slot);
+                    if (observation == null) continue;
                     observeTask = (Task)observation.GetType().GetProperty("ObserveTask").GetValue(observation);
+                }
+                Assert.IsNotNull(observeTask);
                 Assert.IsTrue(Task.Run(hub.Dispose).Wait(TimeSpan.FromSeconds(2)));
                 Assert.IsFalse(observeTask.IsCompleted);
                 thing.Release.Set();

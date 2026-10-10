@@ -28,8 +28,9 @@ namespace Jtext103.CFET2.Core.Event
         public int PerformanceLevel { get; set; } = 0;
 
 
-        private List<Regex> resourceRegexMatches;
-        private List<Regex> eventTypeRegexMatches;
+        public static TimeSpan MatchTimeout { get; } = TimeSpan.FromMilliseconds(100);
+        private List<Regex> resourceRegexMatches = new List<Regex>();
+        private List<Regex> eventTypeRegexMatches = new List<Regex>();
 
 
         /// <summary>
@@ -102,7 +103,9 @@ namespace Jtext103.CFET2.Core.Event
         /// </summary>
         public EventFilter(EventFilter oldFilter) : this()
         {
-            SourcesAndTypes.AddRange(oldFilter.SourcesAndTypes);
+            if (oldFilter == null) throw new ArgumentNullException(nameof(oldFilter));
+            SourcesAndTypes.AddRange(oldFilter.SourcesAndTypes.Select(item =>
+                new SourceAndTypeFilter { Source = item.Source, EventType = item.EventType }));
             (resourceRegexMatches, eventTypeRegexMatches) = makeRegexFilter(SourcesAndTypes);
             Host = EventHub.NormalizeHost(oldFilter.Host);
             PerformanceLevel = oldFilter.PerformanceLevel;
@@ -128,8 +131,14 @@ namespace Jtext103.CFET2.Core.Event
         /// <param name="eventType"></param>
         public void AddSourceAndType(string resource, string eventType)
         {
-            SourcesAndTypes.Add(new SourceAndTypeFilter { Source = resource, EventType = eventType });
-            (resourceRegexMatches, eventTypeRegexMatches) = makeRegexFilter(SourcesAndTypes);
+            // Compile before changing state: an invalid addition must not corrupt an existing filter.
+            var filters = new List<SourceAndTypeFilter>(SourcesAndTypes)
+            {
+                new SourceAndTypeFilter { Source = resource, EventType = eventType }
+            };
+            var compiled = makeRegexFilter(filters);
+            SourcesAndTypes.Add(filters[filters.Count - 1]);
+            (resourceRegexMatches, eventTypeRegexMatches) = compiled;
         }
 
 
@@ -140,8 +149,12 @@ namespace Jtext103.CFET2.Core.Event
         /// <returns>is this event match the event filter, if so it means it need to be handled</returns>
         public bool Predicate(EventArg eventArg)
         {
-            string resource = eventArg.Source;
-            string eventType = eventArg.EventType;
+            return Matches(eventArg.Source, eventArg.EventType);
+        }
+
+        /// <summary>Uses the same full-match semantics for events and resource discovery. May throw RegexMatchTimeoutException.</summary>
+        public bool Matches(string resource, string eventType)
+        {
 
             int matchIndex = 0;
             for (matchIndex=0; matchIndex < resourceRegexMatches.Count(); matchIndex++)
@@ -168,8 +181,8 @@ namespace Jtext103.CFET2.Core.Event
             List<Regex> eventTypes = new List<Regex>();
             foreach (var filter in filters)
             {
-                resources.Add(new Regex(filter.Source, RegexOptions.IgnoreCase));
-                eventTypes.Add( new Regex(filter.EventType, RegexOptions.IgnoreCase));
+                resources.Add(new Regex(filter.Source, RegexOptions.IgnoreCase, MatchTimeout));
+                eventTypes.Add(new Regex(filter.EventType, RegexOptions.IgnoreCase, MatchTimeout));
             }
             return (resources, eventTypes);
         }

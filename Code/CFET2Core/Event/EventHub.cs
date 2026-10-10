@@ -8,6 +8,8 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
+using System.Reflection;
 
 namespace Jtext103.CFET2.Core.Event
 {
@@ -15,7 +17,7 @@ namespace Jtext103.CFET2.Core.Event
     /// let things to subscribe and publish events
     /// the eventHub shouldn't be known, actually Publish/Sub/UnSub should be call like: MyHub.Publish
     /// </summary>
-    public class EventHub : IDisposable
+    public partial class EventHub : IDisposable
     {
         /// <summary>
         /// create the event
@@ -23,6 +25,7 @@ namespace Jtext103.CFET2.Core.Event
         public EventHub()
         {
             logger = Cfet2LogManager.GetLogger("EventHub");
+            InitializeObservationConfiguration();
             resourceObservationManager = new ResourceObservationManager(this);
         }
 
@@ -154,6 +157,8 @@ namespace Jtext103.CFET2.Core.Event
         List<Guid> remoteFallbackRoutes { get; } = new List<Guid>();
         private readonly object localSubLock = new object();
         private readonly object remoteSubLock = new object();
+        private readonly Dictionary<Guid, ObservationHandleGroup> observationGroups = new Dictionary<Guid, ObservationHandleGroup>();
+        private long lastRegexTimeoutWarning;
 
 
         ConcurrentQueue<EventArg> pendingLocalEvent = new ConcurrentQueue<EventArg>();
@@ -354,7 +359,77 @@ namespace Jtext103.CFET2.Core.Event
 
         internal void ObserveResource(Token token, ResourceBase resource, ISample initialSample)
         {
-            resourceObservationManager.Observe(token, resource, initialSample);
+            var group = AttachObservationGroup(token);
+            var result = AcquireResourceObservation(resource, initialSample);
+            if (result.ReasonCode == ResourceObservationReason.DeniedByAutoDenyList)
+            {
+                logger.Warn($"Observation Skipped for {resource.Path}: {result.Reason}");
+                group.ThrowIfDisposed();
+                return;
+            }
+            if (result.Handle == null)
+                throw new Exception.BadResourceRequestException(result.Reason);
+            group.Add(result.Handle);
+            group.ThrowIfDisposed();
+        }
+
+        internal ObservationHandleGroup AttachObservationGroup(Token token)
+        {
+            lock (localSubLock)
+            {
+                ThrowIfDisposed();
+                if (token == null || token.IsRemote || !localSubDict.ContainsKey(token.Id))
+                    throw new InvalidOperationException("The local event subscription is no longer active.");
+                var group = new ObservationHandleGroup();
+                observationGroups.Add(token.Id, group);
+                return group;
+            }
+        }
+
+        internal ResourceObservationResult AcquireResourceObservation(ResourceBase resource, ISample initialSample = null)
+        {
+            ThrowIfDisposed();
+            try
+            {
+                if (autoDenyFilters.Any(filter => filter.Matches(resource.Path, "changed")))
+                    return new ResourceObservationResult(resource.Path, ResourceObservationStatus.Skipped,
+                        "Automatic observation is denied by AutoDenyList.",
+                        reasonCode: ResourceObservationReason.DeniedByAutoDenyList);
+            }
+            catch (RegexMatchTimeoutException ex)
+            {
+                return new ResourceObservationResult(resource.Path, ResourceObservationStatus.Failed,
+                    "AutoDenyList matching timed out: " + ex.Message,
+                    reasonCode: ResourceObservationReason.ListMatchFailed);
+            }
+            string reason = null;
+            if (resource.ResourceType != ResourceTypes.Status && resource.ResourceType != ResourceTypes.Config)
+                reason = "Only Status and Config resources support automatic observation.";
+            else if (resource.SupportsNativeEvent)
+                reason = "Native events do not require automatic observation.";
+            else
+            {
+                try { ResourceObservationTypePolicy.EnsureSupported(resource); }
+                catch (Exception.WrongResourceActionException ex) { reason = ex.Message; }
+                if (reason == null)
+                {
+                    resource.Info.Implementations.TryGetValue(AccessAction.get, out var getter);
+                    if (getter is MethodInfo method && method.GetParameters().Any(p => !p.HasDefaultValue && !p.IsDefined(typeof(ParamArrayAttribute), false)))
+                        reason = "The getter requires arguments.";
+                    else if (getter is PropertyInfo property && property.GetIndexParameters().Length != 0)
+                        reason = "The getter requires index arguments.";
+                }
+            }
+            if (reason != null)
+                return new ResourceObservationResult(resource.Path, ResourceObservationStatus.Skipped, reason);
+            return resourceObservationManager.Acquire(resource, initialSample);
+        }
+
+        internal void StopResourceObservations()
+        {
+            // Revoke all polling first, including an initialization currently inside a getter.
+            resourceObservationManager.Dispose();
+            autoObservationHandles.Dispose();
         }
 
         internal bool IsSubscribed(Token token)
@@ -420,6 +495,7 @@ namespace Jtext103.CFET2.Core.Event
                     return;
                 }
             }
+            ObservationHandleGroup observations;
             lock (localSubLock)
             {
                 if (localSubDict.TryGetValue(token.Id, out var subscriber))
@@ -427,8 +503,10 @@ namespace Jtext103.CFET2.Core.Event
                     removeLocalRoutes(token.Id, subscriber);
                 }
                 localSubDict.Remove(token.Id);
+                observationGroups.TryGetValue(token.Id, out observations);
+                observationGroups.Remove(token.Id);
             }
-            resourceObservationManager.Unobserve(token);
+            observations?.Dispose();
         }
 
         /// <summary>
@@ -450,13 +528,17 @@ namespace Jtext103.CFET2.Core.Event
                     (Task.CurrentId == localLoopTask?.Id || Task.CurrentId == remoteLoopTask?.Id);
             }
 
-            resourceObservationManager.Dispose();
+            StopResourceObservations();
+            ObservationHandleGroup[] groups;
             lock (localSubLock)
             {
+                groups = observationGroups.Values.ToArray();
+                observationGroups.Clear();
                 localSubDict.Clear();
                 localRouteTable.Clear();
                 localFallbackRoutes.Clear();
             }
+            foreach (var group in groups) group.Dispose();
             lock (remoteSubLock)
             {
                 remoteSubDict.Clear();
@@ -638,6 +720,15 @@ namespace Jtext103.CFET2.Core.Event
             try
             {
                 return subscriber.Filter.Predicate(eventArg);
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                var now = DateTime.UtcNow.Ticks;
+                var last = Interlocked.Read(ref lastRegexTimeoutWarning);
+                if (now - last >= TimeSpan.TicksPerSecond &&
+                    Interlocked.CompareExchange(ref lastRegexTimeoutWarning, now, last) == last)
+                    logger.Warn("Event filter exceeded the 100ms regex match timeout; skipping this event match.");
+                return false;
             }
             catch (System.Exception ex)
             {

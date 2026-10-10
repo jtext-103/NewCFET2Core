@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -329,7 +329,7 @@ namespace Jtext103.CFET2.Core
                 ResourceObservationTypePolicy.EnsureSupported(resource);
             }
 
-            var initialValue = resource.Get() as ISample;
+            var initialValue = SlowResourceReadMonitor.Measure(resource.Path, "initial", () => resource.Get() as ISample);
             ensureValidSubscribeInitialValue(initialValue, resource.Path);
 
             var filter = new EventFilter(resource.Path, eventType);

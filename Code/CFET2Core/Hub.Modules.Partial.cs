@@ -148,6 +148,7 @@ namespace Jtext103.CFET2.Core
                     logger.Info(thing.Name.ToString() + " Started.");
                 }
             }
+            myMaster.MyEventHub.InitializeAutoObservations(myMaster.Resources.Values);
         }
 
         /// <summary>
@@ -155,6 +156,8 @@ namespace Jtext103.CFET2.Core
         /// </summary>
         public void DisposeThings()
         {
+            // Revoke polling before device disposal; already-running synchronous getters cannot be aborted.
+            myMaster.MyEventHub.StopResourceObservations();
             for (int i = 0; i < myMaster.thingPathes.Count; i++)
             {
                 var thing = myMaster.Resources[myMaster.thingPathes[i]];

@@ -1,4 +1,5 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -8,6 +9,29 @@ namespace Jtext103.CFET2.Core.Config
 {
     public static class GlobalConfig
     {
+        // Configure before creating Core; initialization writes are not concurrent with snapshot reads.
+        private static IReadOnlyList<ObservationListRule> autoObserveList = Array.AsReadOnly(new ObservationListRule[0]);
+        private static IReadOnlyList<ObservationListRule> autoDenyList = Array.AsReadOnly(new ObservationListRule[0]);
+
+        /// <summary>Configured lists for the next Hub. Updates require restarting the application.</summary>
+        public static IReadOnlyList<ObservationListRule> AutoObserveList
+        {
+            get { return autoObserveList; }
+            set { autoObserveList = AutomaticObservationConfiguration.Copy(value); }
+        }
+        public static IReadOnlyList<ObservationListRule> AutoDenyList
+        {
+            get { return autoDenyList; }
+            set { autoDenyList = AutomaticObservationConfiguration.Copy(value); }
+        }
+
+        internal static AutomaticObservationConfiguration CaptureObservationConfiguration()
+        {
+            return new AutomaticObservationConfiguration(autoObserveList, autoDenyList);
+        }
+
+        public static int ResourceSlowGetThresholdMs { get; set; } = 100;
+
         private const int DefaultLogRetentionDays = 7;
         private const int DefaultResourceObservationIntervalMs = 500;
         private const int DefaultWebSocketResubscribeIntervalMs = 10;
@@ -33,43 +57,13 @@ namespace Jtext103.CFET2.Core.Config
         public static void Populate(string path)
         {
             var configDict = new Dictionary<string, string>();
-            JsonConvert.PopulateObject(File.ReadAllText(path, Encoding.Default), configDict);
-            try
+            foreach (var property in JObject.Parse(File.ReadAllText(path, Encoding.Default)).Properties())
             {
-                IP = configDict["IP"];
-                Port = configDict["Port"];
-                Accept = configDict["Accept"];
-                if (configDict.TryGetValue("LogRetentionDays", out var retentionRaw))
-                {
-                    LogRetentionDays = ParseLogRetentionDays(retentionRaw);
-                }
-                else
-                {
-                    LogRetentionDays = DefaultLogRetentionDays;
-                }
-
-                if (configDict.TryGetValue("ResourceObservationIntervalMs", out var intervalRaw))
-                {
-                    ResourceObservationIntervalMs = ParseResourceObservationIntervalMs(intervalRaw);
-                }
-                else
-                {
-                    ResourceObservationIntervalMs = DefaultResourceObservationIntervalMs;
-                }
-
-                if (configDict.TryGetValue("WebSocketResubscribeIntervalMs", out var resubscribeIntervalRaw))
-                {
-                    WebSocketResubscribeIntervalMs = ParseWebSocketResubscribeIntervalMs(resubscribeIntervalRaw);
-                }
-                else
-                {
-                    WebSocketResubscribeIntervalMs = DefaultWebSocketResubscribeIntervalMs;
-                }
+                var value = property.Value;
+                configDict[property.Name] = value.Type == JTokenType.String ? (string)value :
+                    value.Type == JTokenType.Null ? null : value.ToString(Formatting.None);
             }
-            catch (System.Exception e)
-            {
-                throw e;
-            }
+            Set(configDict);
         }
         public static Dictionary<string, string> Get()
         {
@@ -80,16 +74,29 @@ namespace Jtext103.CFET2.Core.Config
             configDict.Add("LogRetentionDays", LogRetentionDays.ToString());
             configDict.Add("ResourceObservationIntervalMs", ResourceObservationIntervalMs.ToString());
             configDict.Add("WebSocketResubscribeIntervalMs", WebSocketResubscribeIntervalMs.ToString());
+            configDict.Add("ResourceSlowGetThresholdMs", ResourceSlowGetThresholdMs.ToString());
+            var lists = CaptureObservationConfiguration();
+            configDict.Add("AutoObserveList", JsonConvert.SerializeObject(lists.AutoObserveList));
+            configDict.Add("AutoDenyList", JsonConvert.SerializeObject(lists.AutoDenyList));
             return configDict;
         }
 
         public static void Set(Dictionary<string, string> configDict)
         {
+            if (configDict == null) throw new ArgumentNullException(nameof(configDict));
+            // Validate both lists and required keys before mutating any configured values.
+            var observe = ParseObservationList(configDict, "AutoObserveList");
+            var deny = ParseObservationList(configDict, "AutoDenyList");
+            var ip = configDict["IP"];
+            var port = configDict["Port"];
+            var accept = configDict["Accept"];
             try
             {
-                IP = configDict["IP"];
-                Port = configDict["Port"];
-                Accept = configDict["Accept"];
+                IP = ip;
+                Port = port;
+                Accept = accept;
+                ResourceSlowGetThresholdMs = configDict.TryGetValue("ResourceSlowGetThresholdMs", out var slowRaw) && int.TryParse(slowRaw, out var slowMs) && slowMs > 0 ? slowMs : 100;
+
                 if (configDict.TryGetValue("LogRetentionDays", out var retentionRaw))
                 {
                     LogRetentionDays = ParseLogRetentionDays(retentionRaw);
@@ -116,10 +123,43 @@ namespace Jtext103.CFET2.Core.Config
                 {
                     WebSocketResubscribeIntervalMs = DefaultWebSocketResubscribeIntervalMs;
                 }
+                autoObserveList = observe;
+                autoDenyList = deny;
             }
             catch (System.Exception e)
             {
                 throw e;
+            }
+        }
+
+        private static IReadOnlyList<ObservationListRule> ParseObservationList(Dictionary<string, string> config, string key)
+        {
+            if (!config.TryGetValue(key, out var raw) || raw == null)
+                return AutomaticObservationConfiguration.Copy(null);
+            try
+            {
+                var token = JToken.Parse(raw);
+                if (token.Type == JTokenType.Null) return AutomaticObservationConfiguration.Copy(null);
+                if (!(token is JArray array)) throw new ArgumentException("Expected an array.");
+                var rules = new List<ObservationListRule>();
+                foreach (var entry in array)
+                {
+                    if (!(entry is JObject item)) throw new ArgumentException("Expected a Path or Regex object.");
+                    string path = null, regex = null;
+                    foreach (var property in item.Properties())
+                    {
+                        if (property.Value.Type != JTokenType.String) throw new ArgumentException("Rule values must be strings.");
+                        if (property.Name == "Path") path = (string)property.Value;
+                        else if (property.Name == "Regex") regex = (string)property.Value;
+                        else throw new ArgumentException("Unknown rule field: " + property.Name);
+                    }
+                    rules.Add(new ObservationListRule(path, regex));
+                }
+                return AutomaticObservationConfiguration.Copy(rules);
+            }
+            catch (System.Exception ex) when (ex is ArgumentException || ex is JsonException)
+            {
+                throw new ArgumentException("Invalid " + key + ": " + ex.Message, key, ex);
             }
         }
 

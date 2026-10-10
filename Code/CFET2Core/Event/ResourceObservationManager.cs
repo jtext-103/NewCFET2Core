@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jtext103.CFET2.Core.Config;
@@ -9,187 +10,174 @@ using Jtext103.CFET2.Core.Sample;
 
 namespace Jtext103.CFET2.Core.Event
 {
-    internal class ResourceObservationManager : IDisposable
+    internal sealed class ResourceObservationManager : IDisposable
     {
-        private class ResourceObservation
+        // The fixed directory bounds slot lifetime. A stable read gate serializes an old,
+        // uncancellable getter with initialization after the last reference was released.
+        private sealed class ResourceSlot
         {
-            public ResourceObservation(ResourceBase resource, ISample initialSample, CancellationTokenSource cancellation)
-            {
-                Resource = resource;
-                LastValue = initialSample.ObjectVal;
-                Cancellation = cancellation;
-            }
+            public readonly object ReadGate = new object();
+            public ResourceObservation Current;
+        }
 
-            public ResourceBase Resource { get; }
-
-            public object LastValue { get; set; }
-
-            public int RefCount { get; set; }
-
-            public CancellationTokenSource Cancellation { get; }
-
+        private sealed class ResourceObservation
+        {
+            public ResourceBase Resource;
+            public object LastValue;
+            public readonly Dictionary<Guid, ObservationHandle> Handles = new Dictionary<Guid, ObservationHandle>();
+            public readonly CancellationTokenSource Cancellation = new CancellationTokenSource();
             public Task ObserveTask { get; set; }
         }
 
         private readonly EventHub eventHub;
         private readonly ICfet2Logger logger = Cfet2LogManager.GetLogger("ResourceObservationManager");
-        private readonly object observationLock = new object();
-        private readonly Dictionary<string, ResourceObservation> observations = new Dictionary<string, ResourceObservation>(StringComparer.InvariantCultureIgnoreCase);
-        private readonly Dictionary<Guid, string> tokenToResourcePath = new Dictionary<Guid, string>();
+        private readonly object sync = new object();
+        private readonly Dictionary<string, ResourceSlot> slots = new Dictionary<string, ResourceSlot>(StringComparer.InvariantCultureIgnoreCase);
         private bool disposed;
 
-        public ResourceObservationManager(EventHub eventHub)
-        {
-            this.eventHub = eventHub;
-        }
-
+        public ResourceObservationManager(EventHub eventHub) { this.eventHub = eventHub; }
         public TimeSpan ObservationInterval { get; set; } = TimeSpan.FromMilliseconds(GlobalConfig.ResourceObservationIntervalMs);
 
         internal int ObservedResourceCount
         {
-            get
+            get { lock (sync) return slots.Values.Count(slot => slot.Current != null); }
+        }
+
+        public ResourceObservationResult Acquire(ResourceBase resource, ISample initialSample = null)
+        {
+            ResourceSlot slot;
+            lock (sync)
             {
-                lock (observationLock)
+                ThrowIfDisposed();
+                if (!slots.TryGetValue(resource.Path, out slot))
+                    slots.Add(resource.Path, slot = new ResourceSlot());
+                if (slot.Current != null) return AddHandle(slot, slot.Current, ResourceObservationStatus.Shared);
+            }
+
+            lock (slot.ReadGate)
+            {
+                lock (sync)
                 {
-                    return observations.Count;
+                    ThrowIfDisposed();
+                    if (slot.Current != null) return AddHandle(slot, slot.Current, ResourceObservationStatus.Shared);
+                }
+
+                // Never execute device code with the manager/state lock held.
+                object initialValue = null;
+                string failure = null;
+                try
+                {
+                    var sample = initialSample ?? SlowResourceReadMonitor.Measure(resource.Path, "initial", () => resource.Get() as ISample);
+                    if (sample == null || !sample.IsValid)
+                        failure = "Initial read returned an invalid sample.";
+                    else
+                        initialValue = sample.ObjectVal;
+                }
+                catch (System.Exception ex) { failure = "Initial read failed: " + ex.Message; }
+
+                lock (sync)
+                {
+                    ThrowIfDisposed();
+                    if (failure != null)
+                        return new ResourceObservationResult(resource.Path, ResourceObservationStatus.Failed, failure);
+                    var observation = new ResourceObservation { Resource = resource, LastValue = initialValue };
+                    slot.Current = observation;
+                    var result = AddHandle(slot, observation, ResourceObservationStatus.Started);
+                    observation.ObserveTask = Task.Run(() => ObserveLoop(slot, observation));
+                    return result;
                 }
             }
         }
 
-        public void Observe(Token token, ResourceBase resource, ISample initialSample)
+        private ResourceObservationResult AddHandle(ResourceSlot slot, ResourceObservation observation, ResourceObservationStatus status)
         {
-            ResourceObservation observation;
-            var shouldStart = false;
-            lock (observationLock)
-            {
-                if (disposed)
-                {
-                    return;
-                }
-
-                if (tokenToResourcePath.ContainsKey(token.Id))
-                {
-                    return;
-                }
-
-                if (!observations.TryGetValue(resource.Path, out observation))
-                {
-                    observation = new ResourceObservation(resource, initialSample, new CancellationTokenSource());
-                    observations.Add(resource.Path, observation);
-                    shouldStart = true;
-                }
-                observation.RefCount++;
-                tokenToResourcePath.Add(token.Id, resource.Path);
-                if (shouldStart)
-                {
-                    observation.ObserveTask = Task.Run(() => observeLoop(observation));
-                }
-            }
+            ObservationHandle handle = null;
+            handle = new ObservationHandle(observation.Resource.Path, () => Release(slot, observation, handle.Id));
+            observation.Handles.Add(handle.Id, handle);
+            return new ResourceObservationResult(observation.Resource.Path, status, handle: handle);
         }
 
-        public void Unobserve(Token token)
+        private void Release(ResourceSlot slot, ResourceObservation observation, Guid id)
         {
-            ResourceObservation observationToStop = null;
-            lock (observationLock)
+            lock (sync)
             {
-                if (!tokenToResourcePath.TryGetValue(token.Id, out var resourcePath))
-                {
-                    return;
-                }
-
-                tokenToResourcePath.Remove(token.Id);
-                if (!observations.TryGetValue(resourcePath, out var observation))
-                {
-                    return;
-                }
-
-                observation.RefCount--;
-                if (observation.RefCount <= 0)
-                {
-                    observations.Remove(resourcePath);
-                    observationToStop = observation;
-                }
-            }
-
-            if (observationToStop != null)
-            {
-                observationToStop.Cancellation.Cancel();
-                observationToStop.ObserveTask?.ContinueWith(_ => observationToStop.Cancellation.Dispose());
+                if (!observation.Handles.Remove(id) || observation.Handles.Count != 0) return;
+                if (ReferenceEquals(slot.Current, observation)) slot.Current = null;
+                observation.Cancellation.Cancel();
             }
         }
 
         public void Dispose()
         {
-            List<ResourceObservation> observationsToStop;
-            lock (observationLock)
+            ObservationHandle[] handles;
+            lock (sync)
             {
+                if (disposed) return;
                 disposed = true;
-                observationsToStop = new List<ResourceObservation>(observations.Values);
-                observations.Clear();
-                tokenToResourcePath.Clear();
+                handles = slots.Values.Where(s => s.Current != null)
+                    .SelectMany(s => s.Current.Handles.Values).ToArray();
+                foreach (var slot in slots.Values)
+                {
+                    if (slot.Current == null) continue;
+                    slot.Current.Handles.Clear();
+                    slot.Current.Cancellation.Cancel();
+                    slot.Current = null;
+                }
+                slots.Clear();
             }
-
-            foreach (var observation in observationsToStop)
-            {
-                observation.Cancellation.Cancel();
-                // The getter may still be running; release its cancellation source only after the loop exits.
-                observation.ObserveTask.ContinueWith(_ => observation.Cancellation.Dispose(), TaskScheduler.Default);
-            }
+            foreach (var handle in handles) handle.Dispose();
         }
 
-        private async Task observeLoop(ResourceObservation observation)
+        private bool IsCurrent(ResourceSlot slot, ResourceObservation observation)
         {
-            while (!observation.Cancellation.IsCancellationRequested)
+            return !disposed && ReferenceEquals(slot.Current, observation) && observation.Handles.Count != 0;
+        }
+
+        private async Task ObserveLoop(ResourceSlot slot, ResourceObservation observation)
+        {
+            try
             {
-                try
+                while (!observation.Cancellation.IsCancellationRequested)
                 {
-                    await Task.Delay(ObservationInterval, observation.Cancellation.Token);
-                    if (observation.Cancellation.IsCancellationRequested)
+                    try
                     {
-                        return;
-                    }
-
-                    var current = observation.Resource.Get() as ISample;
-                    var observedAt = DateTimeOffset.UtcNow;
-                    if (current == null || !current.IsValid)
-                    {
-                        continue;
-                    }
-
-                    var currentValue = current.ObjectVal;
-                    var changed = false;
-                    lock (observationLock)
-                    {
-                        if (!observations.ContainsKey(observation.Resource.Path))
+                        await Task.Delay(ObservationInterval, observation.Cancellation.Token).ConfigureAwait(false);
+                        lock (slot.ReadGate)
                         {
-                            return;
-                        }
-
-                        changed = !object.Equals(observation.LastValue, currentValue);
-                        if (changed)
-                        {
-                            observation.LastValue = currentValue;
+                            lock (sync) { if (!IsCurrent(slot, observation)) return; }
+                            var current = SlowResourceReadMonitor.Measure(observation.Resource.Path, "poll", () => observation.Resource.Get() as ISample);
+                            var observedAt = DateTimeOffset.UtcNow;
+                            if (current == null || !current.IsValid) continue;
+                            var value = current.ObjectVal;
+                            var sample = new Status<object>(current.Context);
+                            sample.Context[SampleBase<object>.KeyOfVal] = value;
+                            sample.Timestamp = current.Timestamp ?? observedAt;
+                            lock (sync)
+                            {
+                                if (!IsCurrent(slot, observation)) return;
+                                if (object.Equals(observation.LastValue, value)) continue;
+                                observation.LastValue = value;
+                                // Publish enqueues only; user handlers execute outside this lock.
+                                eventHub.Publish(observation.Resource.Path, "changed", sample);
+                            }
                         }
                     }
-
-                    if (changed)
+                    catch (OperationCanceledException) when (observation.Cancellation.IsCancellationRequested) { return; }
+                    catch (System.Exception ex)
                     {
-                        var sample = new Status<object>(current.Context);
-                        sample.Context[SampleBase<object>.KeyOfVal] = currentValue;
-                        sample.Timestamp = current.Timestamp ?? observedAt;
-                        eventHub.Publish(observation.Resource.Path, "changed", sample);
+                        logger.Warn($"Observe resource {observation.Resource.Path} failed: {ex.Message}");
                     }
                 }
-                catch (TaskCanceledException)
-                {
-                    return;
-                }
-                catch (System.Exception ex)
-                {
-                    logger.Warn($"Observe resource {observation.Resource.Path} failed: {ex.Message}");
-                }
+            }
+            finally
+            {
+                lock (sync) observation.Cancellation.Dispose();
             }
         }
 
+        private void ThrowIfDisposed()
+        {
+            if (disposed) throw new ObjectDisposedException(nameof(ResourceObservationManager));
+        }
     }
 }
