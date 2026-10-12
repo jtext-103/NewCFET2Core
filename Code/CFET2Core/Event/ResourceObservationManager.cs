@@ -149,7 +149,7 @@ namespace Jtext103.CFET2.Core.Event
                             var observedAt = DateTimeOffset.UtcNow;
                             if (current == null || !current.IsValid) continue;
                             var value = ResourceValueComparison.Capture(ResourceObservationTypePolicy.GetValueType(observation.Resource), current.ObjectVal);
-                            if (!ResourceValueComparison.HasChanged(observation.LastValue, value)) continue;
+                            if (!ResourceValueComparison.HasChanged(observation.LastValue, value, eventHub.ResolveMinDelta(observation.Resource))) continue;
                             var sample = new Status<object>(current.Context);
                             sample.Context[SampleBase<object>.KeyOfVal] = value.CreateEventValue();
                             sample.Timestamp = current.Timestamp ?? observedAt;

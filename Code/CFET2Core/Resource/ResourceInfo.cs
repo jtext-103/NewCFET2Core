@@ -14,6 +14,17 @@ namespace Jtext103.CFET2.Core.Resource
 
         public bool SupportsNativeEvent { get; set; }
 
+        /// <summary>Any declared getter argument requires component-driven events, even if optional.</summary>
+        public bool HasGetterParameters
+        {
+            get
+            {
+                if (!Implementations.TryGetValue(AccessAction.get, out var getter)) return false;
+                return getter is MethodInfo method ? method.GetParameters().Length != 0 :
+                    getter is PropertyInfo property && property.GetIndexParameters().Length != 0;
+            }
+        }
+
         /// <summary>
         /// the implementions of this resource
         /// </summary>

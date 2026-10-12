@@ -32,7 +32,7 @@ namespace Jtext103.CFET2.Core.Event
                 ResourceValueSnapshot current;
                 try { current = ResourceValueComparison.Capture(value); }
                 catch (NotSupportedException ex) { throw new NotSupportedException($"Resource '{path}': {ex.Message}", ex); }
-                if (slot.Baseline != null && !ResourceValueComparison.HasChanged(slot.Baseline, current))
+                if (slot.Baseline != null && !ResourceValueComparison.HasChanged(slot.Baseline, current, ResolveMinDelta(resource)))
                 {
                     EnsurePublicationOpen();
                     return false;

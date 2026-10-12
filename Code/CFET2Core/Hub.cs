@@ -309,7 +309,13 @@ namespace Jtext103.CFET2.Core
                 return subscribeRemoteResource(resourceUri, uri, handler, eventType);
             }
 
-            var resource = FindLocalResourceWithPath(resourceUri);
+            if (!resourceUri.StartsWith("/", StringComparison.Ordinal) && (!uri.IsAbsoluteUri || uri.IsFile))
+            {
+                throw new ArgumentException("Local subscription paths must start with '/'.", nameof(resourceUri));
+            }
+
+            var parsed = ParseLocalRequest(uri);
+            var resource = GetLocalResouce(parsed.ResourcePath);
             if (resource == null)
             {
                 throw new ResourceDoesNotExistException();
@@ -320,24 +326,28 @@ namespace Jtext103.CFET2.Core
                 throw new WrongResourceActionException("SubscribeResource only supports Status and Config resources: " + resource.Path);
             }
 
-            if (!resource.SupportsNativeEvent && !string.Equals(eventType, "changed", StringComparison.InvariantCultureIgnoreCase))
+            bool needsObservation = !resource.SupportsNativeEvent && !resource.Info.HasGetterParameters;
+            if (needsObservation && !string.Equals(eventType, "changed", StringComparison.InvariantCultureIgnoreCase))
             {
                 throw new WrongResourceActionException("Observed resources without Cfet2Event only support changed event: " + resource.Path);
             }
 
-            if (!resource.SupportsNativeEvent)
+            if (needsObservation)
             {
                 ResourceObservationTypePolicy.EnsureSupported(resource);
             }
 
-            var initialValue = SlowResourceReadMonitor.Measure(resource.Path, "initial", () => resource.Get() as ISample);
+            var initialValue = SlowResourceReadMonitor.Measure(resource.Path, "initial", () =>
+                localAccessWithUri((path, args) => ReadSubscriptionInitial(resource, args),
+                    (path, dict) => ReadSubscriptionInitial(resource, new object[] { new DictionaryInputsIndicator(), dict }),
+                    resourceUri, null, null, false));
             ensureValidSubscribeInitialValue(initialValue, resource.Path);
 
-            var filter = new EventFilter(resource.Path, eventType);
+            var filter = CreateExactSubscriptionFilter(resourceUri, uri, eventType);
             var token = Subscribe(filter, handler);
             try
             {
-                if (!resource.SupportsNativeEvent)
+                if (needsObservation)
                 {
                     myMaster.MyEventHub.ObserveResource(token, resource, initialValue);
                 }
@@ -369,7 +379,7 @@ namespace Jtext103.CFET2.Core
                 throw new WrongResourceActionException("SubscribeResource only supports Status and Config resources: " + resourceUri);
             }
 
-            var filter = new EventFilter(resourceUri, eventType);
+            var filter = CreateExactSubscriptionFilter(resourceUri, uri, eventType);
             var token = Subscribe(filter, handler);
             if (!myMaster.MyEventHub.IsSubscribed(token))
             {

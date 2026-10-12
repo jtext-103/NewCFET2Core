@@ -29,6 +29,17 @@ namespace Jtext103.CFET2.Core.Event
             ValueTypeValidation.EnsureSupported(declaredType, "DeclaredType");
             return new ResourceValueSnapshot(ObservationValueSnapshot.Capture(value));
         }
+
+        /// <summary>Compares changed scalar numbers against a finite nonnegative threshold.
+        /// Containers and nonnumeric values retain content comparison. Floating arithmetic has no epsilon.</summary>
+        public static bool HasChanged(ResourceValueSnapshot previous, ResourceValueSnapshot current, double minDelta)
+        {
+            if (previous == null) throw new ArgumentNullException(nameof(previous));
+            if (current == null) throw new ArgumentNullException(nameof(current));
+            Config.ResourceMinDeltaOverride.Validate(minDelta, nameof(minDelta));
+            if (!HasChanged(previous, current)) return false;
+            return minDelta == 0 || NumericDeltaComparison.MeetsThreshold(previous.Value, current.Value, minDelta);
+        }
     }
 
     internal static class ValueTypeValidation

@@ -7,7 +7,7 @@ using System.Text;
 
 namespace Jtext103.CFET2.Core.Config
 {
-    public static class GlobalConfig
+    public static partial class GlobalConfig
     {
         // Configure before creating Core; initialization writes are not concurrent with snapshot reads.
         private static IReadOnlyList<ObservationListRule> autoObserveList = Array.AsReadOnly(new ObservationListRule[0]);
@@ -57,9 +57,14 @@ namespace Jtext103.CFET2.Core.Config
         public static void Populate(string path)
         {
             var configDict = new Dictionary<string, string>();
-            foreach (var property in JObject.Parse(File.ReadAllText(path, Encoding.Default)).Properties())
+            JObject document;
+            try { document = JObject.Parse(File.ReadAllText(path, Encoding.Default)); }
+            catch (JsonException ex) { throw new ArgumentException("Invalid GlobalConfig JSON: " + ex.Message, nameof(path), ex); }
+            foreach (var property in document.Properties())
             {
                 var value = property.Value;
+                if (property.Name == "ResourceMinDelta" && value.Type != JTokenType.Float && value.Type != JTokenType.Integer)
+                    throw new ArgumentException("Invalid ResourceMinDelta: expected a JSON number.", "ResourceMinDelta");
                 configDict[property.Name] = value.Type == JTokenType.String ? (string)value :
                     value.Type == JTokenType.Null ? null : value.ToString(Formatting.None);
             }
@@ -78,6 +83,8 @@ namespace Jtext103.CFET2.Core.Config
             var lists = CaptureObservationConfiguration();
             configDict.Add("AutoObserveList", JsonConvert.SerializeObject(lists.AutoObserveList));
             configDict.Add("AutoDenyList", JsonConvert.SerializeObject(lists.AutoDenyList));
+            configDict.Add("ResourceMinDelta", ResourceMinDelta.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+            configDict.Add("ResourceMinDeltaOverrides", JsonConvert.SerializeObject(ResourceMinDeltaOverrides));
             return configDict;
         }
 
@@ -87,6 +94,8 @@ namespace Jtext103.CFET2.Core.Config
             // Validate both lists and required keys before mutating any configured values.
             var observe = ParseObservationList(configDict, "AutoObserveList");
             var deny = ParseObservationList(configDict, "AutoDenyList");
+            var delta = configDict.TryGetValue("ResourceMinDelta", out var deltaRaw) ? ParseMinDelta(deltaRaw, "ResourceMinDelta") : 0;
+            var deltaOverrides = ParseMinDeltaOverrides(configDict);
             var ip = configDict["IP"];
             var port = configDict["Port"];
             var accept = configDict["Accept"];
@@ -125,6 +134,8 @@ namespace Jtext103.CFET2.Core.Config
                 }
                 autoObserveList = observe;
                 autoDenyList = deny;
+                resourceMinDelta = delta;
+                resourceMinDeltaOverrides = deltaOverrides;
             }
             catch (System.Exception e)
             {

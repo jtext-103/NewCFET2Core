@@ -17,7 +17,7 @@ WS 不实现自己的 getter 轮询、变化判断或资源引用计数。原始
 
 ## 2. 当前服务端结构
 
-以下为独立 WS 模块仓库中的文件，相对该仓库的 `WebSocketCommunicationModule/` 目录列出，供说明接入职责；这些文件不属于 Core 仓库：
+以下为独立仓库 websocketcommunicationmodule 中的文件，相对该仓库的 `WebSocketCommunicationModule/` 目录列出，供说明接入职责；这些文件不属于 Core 仓库：
 
 | 文件 | 职责 |
 |---|---|
@@ -266,7 +266,7 @@ Core 仓库内的验证入口为 `Code/CodeTest/Event/RegexResourceObservationTe
 dotnet test Code/CodeTest/CodeTest.csproj
 ```
 
-WS 端到端测试属于独立 WS 仓库，包括 `WebSocketRegexSubscriptionLifecycleTests.cs`、`WebSocketRegexSubscriptionEndToEndTests.cs`、`WebSocketRegexCoverageTests.cs`、`WebSocketRegexCoverageEndToEndTests.cs` 和 `WebSocketAutomaticObservationListTests.cs`。在具备其所需 Core 项目依赖的 WS 检出环境中，从 WS 仓库根目录执行：
+WS 端到端测试属于独立仓库 websocketcommunicationmodule，包括 `WebSocketRegexSubscriptionLifecycleTests.cs`、`WebSocketRegexSubscriptionEndToEndTests.cs`、`WebSocketRegexCoverageTests.cs`、`WebSocketRegexCoverageEndToEndTests.cs` 和 `WebSocketAutomaticObservationListTests.cs`。在具备其所需 Core 项目依赖的 WS 检出环境中，从 WS 仓库根目录执行：
 
 ```powershell
 dotnet test TestCode/TestCode.csproj

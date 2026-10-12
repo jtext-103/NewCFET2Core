@@ -26,6 +26,7 @@ namespace Jtext103.CFET2.Core.Event
         {
             logger = Cfet2LogManager.GetLogger("EventHub");
             InitializeObservationConfiguration();
+            changePublicationConfiguration = Config.GlobalConfig.CaptureChangePublicationConfiguration();
             resourceObservationManager = new ResourceObservationManager(this);
         }
 
@@ -413,18 +414,12 @@ namespace Jtext103.CFET2.Core.Event
                 reason = "Only Status and Config resources support automatic observation.";
             else if (resource.SupportsNativeEvent)
                 reason = "Native events do not require automatic observation.";
+            else if (resource.Info.HasGetterParameters)
+                reason = "Parameterized getters require active publication and do not support automatic observation.";
             else
             {
                 try { ResourceObservationTypePolicy.EnsureSupported(resource); }
                 catch (Exception.WrongResourceActionException ex) { reason = ex.Message; }
-                if (reason == null)
-                {
-                    resource.Info.Implementations.TryGetValue(AccessAction.get, out var getter);
-                    if (getter is MethodInfo method && method.GetParameters().Any(p => !p.HasDefaultValue && !p.IsDefined(typeof(ParamArrayAttribute), false)))
-                        reason = "The getter requires arguments.";
-                    else if (getter is PropertyInfo property && property.GetIndexParameters().Length != 0)
-                        reason = "The getter requires index arguments.";
-                }
             }
             if (reason != null)
                 return new ResourceObservationResult(resource.Path, ResourceObservationStatus.Skipped, reason);

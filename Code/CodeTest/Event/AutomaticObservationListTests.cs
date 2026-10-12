@@ -100,7 +100,10 @@ namespace Jtext103.CFET2.Core.Test.Event
                 GlobalConfig.AutoDenyList = Array.Empty<ObservationListRule>();
                 GlobalConfig.Set(saved);
                 Assert.AreEqual("/hidden/.*", GlobalConfig.AutoDenyList.Single().Regex);
-                File.WriteAllText(file, Newtonsoft.Json.JsonConvert.SerializeObject(saved));
+                var json = JObject.FromObject(saved);
+                // New thresholds use JSON numbers; Get/Set retains its string dictionary contract.
+                json["ResourceMinDelta"] = GlobalConfig.ResourceMinDelta;
+                File.WriteAllText(file, json.ToString());
                 GlobalConfig.Populate(file);
                 Assert.AreEqual("/device/Value", GlobalConfig.AutoObserveList.Single().Path);
                 saved.Remove("AutoObserveList"); saved.Remove("AutoDenyList");
@@ -210,12 +213,12 @@ namespace Jtext103.CFET2.Core.Test.Event
             Assert.AreEqual(ResourceObservationReason.DeniedByAutoDenyList, results["/device/Value"].ReasonCode);
             foreach (var name in new[] { "Native", "Required", "Complex", "Action" })
                 Assert.AreEqual(ResourceObservationStatus.Skipped, results["/device/" + name].Status, name);
-            Assert.AreEqual(ResourceObservationStatus.Started, results["/device/Default"].Status);
+            Assert.AreEqual(ResourceObservationStatus.Skipped, results["/device/Default"].Status);
             Assert.AreEqual(ResourceObservationStatus.Started, results["/device/Config"].Status);
             Assert.AreEqual(0, device.Reads);
             Assert.AreEqual(0, device.IneligibleReads);
-            Assert.AreEqual(7, device.LastDefault);
-            Assert.AreEqual(2, ObservedCount);
+            Assert.AreEqual(0, device.LastDefault);
+            Assert.AreEqual(1, ObservedCount);
         }
 
         [TestMethod]

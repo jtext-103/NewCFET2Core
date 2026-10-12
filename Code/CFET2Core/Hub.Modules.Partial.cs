@@ -139,6 +139,7 @@ namespace Jtext103.CFET2.Core
         public void StartThings()
         {
             addThing(new RootThing(), "/", "root", null, true);
+            myMaster.MyEventHub.ValidateMinDeltaDirectory(myMaster.Resources.Values);
             for (int i = 0; i < myMaster.thingPathes.Count; i++)
             {
                 var thing = myMaster.Resources[myMaster.thingPathes[i]];

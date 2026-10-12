@@ -167,7 +167,9 @@ public class SlowResourceReadTests
             {
                 var config = new Dictionary<string, string>(original);
                 if (value == null) config.Remove("ResourceSlowGetThresholdMs"); else config["ResourceSlowGetThresholdMs"] = value;
-                System.IO.File.WriteAllText(path, Newtonsoft.Json.JsonConvert.SerializeObject(config));
+                var json = Newtonsoft.Json.Linq.JObject.FromObject(config);
+                json["ResourceMinDelta"] = GlobalConfig.ResourceMinDelta;
+                System.IO.File.WriteAllText(path, json.ToString());
                 GlobalConfig.Populate(path);
                 Assert.AreEqual(value == "250" ? 250 : 100, GlobalConfig.ResourceSlowGetThresholdMs);
             }

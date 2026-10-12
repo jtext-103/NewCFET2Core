@@ -66,7 +66,9 @@ namespace Jtext103.CFET2.Core
         }
 
         /// <summary>Publishes changed when the value differs from this path's last publication.
-        /// First values publish. True means accepted locally, not delivered remotely.</summary>
+        /// Uses the EventHub's global/base-resource minDelta configuration for scalar numbers.
+        /// First values publish. Suppressed changes retain the baseline.
+        /// True means accepted locally, not delivered remotely.</summary>
         public bool PublishResourceIfChanged<T>(string resourceName, T value, object[] parameters = null,
             DateTimeOffset? timestamp = null)
         {
