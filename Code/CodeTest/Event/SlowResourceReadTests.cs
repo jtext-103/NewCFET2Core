@@ -169,6 +169,8 @@ public class SlowResourceReadTests
                 if (value == null) config.Remove("ResourceSlowGetThresholdMs"); else config["ResourceSlowGetThresholdMs"] = value;
                 var json = Newtonsoft.Json.Linq.JObject.FromObject(config);
                 json["ResourceMinDelta"] = GlobalConfig.ResourceMinDelta;
+                json["EventPublishTransports"] = Newtonsoft.Json.Linq.JArray.Parse(GlobalConfig.Get()["EventPublishTransports"]);
+                json["WebSocketPortOffset"] = GlobalConfig.WebSocketPortOffset;
                 System.IO.File.WriteAllText(path, json.ToString());
                 GlobalConfig.Populate(path);
                 Assert.AreEqual(value == "250" ? 250 : 100, GlobalConfig.ResourceSlowGetThresholdMs);

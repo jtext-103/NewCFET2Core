@@ -3,6 +3,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace Jtext103.CFET2.Core.Config
@@ -63,6 +64,10 @@ namespace Jtext103.CFET2.Core.Config
             foreach (var property in document.Properties())
             {
                 var value = property.Value;
+                if ((property.Name == "HttpEventSubscriptionTransport" && value.Type != JTokenType.String) ||
+                    (property.Name == "WebSocketPortOffset" && value.Type != JTokenType.Integer) ||
+                    (property.Name == "EventPublishTransports" && value.Type != JTokenType.Array))
+                    throw new ArgumentException("Invalid " + property.Name + ": unexpected JSON type.", property.Name);
                 if (property.Name == "ResourceMinDelta" && value.Type != JTokenType.Float && value.Type != JTokenType.Integer)
                     throw new ArgumentException("Invalid ResourceMinDelta: expected a JSON number.", "ResourceMinDelta");
                 configDict[property.Name] = value.Type == JTokenType.String ? (string)value :
@@ -85,6 +90,9 @@ namespace Jtext103.CFET2.Core.Config
             configDict.Add("AutoDenyList", JsonConvert.SerializeObject(lists.AutoDenyList));
             configDict.Add("ResourceMinDelta", ResourceMinDelta.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
             configDict.Add("ResourceMinDeltaOverrides", JsonConvert.SerializeObject(ResourceMinDeltaOverrides));
+            configDict.Add("EventPublishTransports", JsonConvert.SerializeObject(EventPublishTransports.Select(x => x.ToString())));
+            configDict.Add("HttpEventSubscriptionTransport", HttpEventSubscriptionTransport.ToString());
+            configDict.Add("WebSocketPortOffset", WebSocketPortOffset.ToString(System.Globalization.CultureInfo.InvariantCulture));
             return configDict;
         }
 
@@ -96,51 +104,28 @@ namespace Jtext103.CFET2.Core.Config
             var deny = ParseObservationList(configDict, "AutoDenyList");
             var delta = configDict.TryGetValue("ResourceMinDelta", out var deltaRaw) ? ParseMinDelta(deltaRaw, "ResourceMinDelta") : 0;
             var deltaOverrides = ParseMinDeltaOverrides(configDict);
+            var communication = ParseEventCommunication(configDict);
             var ip = configDict["IP"];
             var port = configDict["Port"];
             var accept = configDict["Accept"];
-            try
-            {
-                IP = ip;
-                Port = port;
-                Accept = accept;
-                ResourceSlowGetThresholdMs = configDict.TryGetValue("ResourceSlowGetThresholdMs", out var slowRaw) && int.TryParse(slowRaw, out var slowMs) && slowMs > 0 ? slowMs : 100;
-
-                if (configDict.TryGetValue("LogRetentionDays", out var retentionRaw))
-                {
-                    LogRetentionDays = ParseLogRetentionDays(retentionRaw);
-                }
-                else
-                {
-                    LogRetentionDays = DefaultLogRetentionDays;
-                }
-
-                if (configDict.TryGetValue("ResourceObservationIntervalMs", out var intervalRaw))
-                {
-                    ResourceObservationIntervalMs = ParseResourceObservationIntervalMs(intervalRaw);
-                }
-                else
-                {
-                    ResourceObservationIntervalMs = DefaultResourceObservationIntervalMs;
-                }
-
-                if (configDict.TryGetValue("WebSocketResubscribeIntervalMs", out var resubscribeIntervalRaw))
-                {
-                    WebSocketResubscribeIntervalMs = ParseWebSocketResubscribeIntervalMs(resubscribeIntervalRaw);
-                }
-                else
-                {
-                    WebSocketResubscribeIntervalMs = DefaultWebSocketResubscribeIntervalMs;
-                }
-                autoObserveList = observe;
-                autoDenyList = deny;
-                resourceMinDelta = delta;
-                resourceMinDeltaOverrides = deltaOverrides;
-            }
-            catch (System.Exception e)
-            {
-                throw e;
-            }
+            var slow = configDict.TryGetValue("ResourceSlowGetThresholdMs", out var slowRaw) && int.TryParse(slowRaw, out var slowMs) && slowMs > 0 ? slowMs : 100;
+            var retention = configDict.TryGetValue("LogRetentionDays", out var retentionRaw) ? ParseLogRetentionDays(retentionRaw) : DefaultLogRetentionDays;
+            var interval = configDict.TryGetValue("ResourceObservationIntervalMs", out var intervalRaw) ? ParseResourceObservationIntervalMs(intervalRaw) : DefaultResourceObservationIntervalMs;
+            var resubscribe = configDict.TryGetValue("WebSocketResubscribeIntervalMs", out var resubscribeRaw) ? ParseWebSocketResubscribeIntervalMs(resubscribeRaw) : DefaultWebSocketResubscribeIntervalMs;
+            IP = ip;
+            Port = port;
+            Accept = accept;
+            ResourceSlowGetThresholdMs = slow;
+            LogRetentionDays = retention;
+            ResourceObservationIntervalMs = interval;
+            WebSocketResubscribeIntervalMs = resubscribe;
+            autoObserveList = observe;
+            autoDenyList = deny;
+            resourceMinDelta = delta;
+            resourceMinDeltaOverrides = deltaOverrides;
+            eventPublishTransports = communication.EventPublishTransports;
+            httpEventSubscriptionTransport = communication.HttpEventSubscriptionTransport;
+            webSocketPortOffset = communication.WebSocketPortOffset;
         }
 
         private static IReadOnlyList<ObservationListRule> ParseObservationList(Dictionary<string, string> config, string key)

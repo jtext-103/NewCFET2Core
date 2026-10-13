@@ -137,7 +137,7 @@ namespace Jtext103.CFET2.Core.Test.HubTest
             var secondEventComm = new DummyEventCommunicationModule();
 
             MyHub.TryAddCommunicationModule(firstEventComm);
-            MyHub.TryAddCommunicationModule(secondEventComm);
+            Assert.ThrowsExactly<InvalidOperationException>(() => MyHub.TryAddCommunicationModule(secondEventComm));
 
             var token = MyHub.EventHub.Subscribe(
                 new EventFilter("/thing1/StatusP", "changed", 0, "eventdummy://remote-host:1234"),

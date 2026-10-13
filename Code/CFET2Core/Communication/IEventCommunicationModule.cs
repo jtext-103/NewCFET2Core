@@ -12,6 +12,9 @@ namespace Jtext103.CFET2.Core.Communication
         /// </summary>
         public abstract string[] ProtocolNames { get; }
 
+        /// <summary>Identity for HTTP event routing. Custom protocol modules may leave this null.</summary>
+        public virtual Config.EventTransport? Transport => null;
+
         /// <summary>
         /// this is called after all things have been started,you should make sure invoke start twice or more is ok
         /// </summary>

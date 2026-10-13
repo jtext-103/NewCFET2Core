@@ -310,6 +310,9 @@ namespace Jtext103.CFET2.Core.Event
                 filter.Host = NormalizeHost(filter.Host);
 
                 //try subscribe remote event
+                var requestedHost = new Uri(filter.Host);
+                if (string.Equals(requestedHost.Scheme, "http", StringComparison.OrdinalIgnoreCase))
+                    filter = new EventFilter(filter) { Host = GetFullHost(requestedHost.Scheme, requestedHost.Host, requestedHost.Port) };
                 string protocol = new Uri(filter.Host).Scheme;
                 var eventModule = HubMaster.getInstance().MyCommunicationManager.GetModuleForEvent(protocol);
                 if (eventModule != null)
@@ -346,8 +349,7 @@ namespace Jtext103.CFET2.Core.Event
                     return remoteToken;
                 }
                 //no matching protocol, print log
-                logger.Error("No matching remote event hub for: " + filter.Host);
-                return null;
+                throw new Jtext103.CFET2.Core.Exception.ProtocolNotSuportedException("No matching remote event hub for: " + filter.Host);
             }
             //sub local event
             var token = new Token(this);
@@ -603,9 +605,9 @@ namespace Jtext103.CFET2.Core.Event
             if (eventCM != null)
             {
                 string fullhost = eventCM.GetFullHost(protocol, hostname, port);
-                return NormalizeHost(fullhost);
+                if (!string.IsNullOrWhiteSpace(fullhost)) return NormalizeHost(fullhost);
             }
-            return string.Empty;
+            throw new Jtext103.CFET2.Core.Exception.ProtocolNotSuportedException("No available event module for " + protocol);
         }
 
         public static string NormalizeHost(string host)

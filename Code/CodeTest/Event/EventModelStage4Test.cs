@@ -107,6 +107,7 @@ namespace Jtext103.CFET2.Core.Test.Event
 
         private class HttpEventCommunicationModule : IEventCommunicationModule
         {
+            public override Config.EventTransport? Transport => Config.EventTransport.WebSocket;
             public override string[] ProtocolNames => new[] { "http" };
 
             public override void Dispose()

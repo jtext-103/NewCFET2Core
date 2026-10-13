@@ -103,6 +103,8 @@ namespace Jtext103.CFET2.Core.Test.Event
                 var json = JObject.FromObject(saved);
                 // New thresholds use JSON numbers; Get/Set retains its string dictionary contract.
                 json["ResourceMinDelta"] = GlobalConfig.ResourceMinDelta;
+                json["EventPublishTransports"] = Newtonsoft.Json.Linq.JArray.Parse(GlobalConfig.Get()["EventPublishTransports"]);
+                json["WebSocketPortOffset"] = GlobalConfig.WebSocketPortOffset;
                 File.WriteAllText(file, json.ToString());
                 GlobalConfig.Populate(file);
                 Assert.AreEqual("/device/Value", GlobalConfig.AutoObserveList.Single().Path);

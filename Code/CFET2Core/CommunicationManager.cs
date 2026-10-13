@@ -1,4 +1,4 @@
-﻿using Jtext103.CFET2.Core.Communication;
+using Jtext103.CFET2.Core.Communication;
 using Jtext103.CFET2.Core.Log;
 using System;
 using System.Collections.Generic;
@@ -17,6 +17,8 @@ namespace Jtext103.CFET2.Core
         Dictionary<string, CommunicationModule> moduleDict = new Dictionary<string, CommunicationModule>(StringComparer.InvariantCultureIgnoreCase);
         Dictionary<string, IEventCommunicationModule> eventModuleDict = new Dictionary<string, IEventCommunicationModule>(StringComparer.InvariantCultureIgnoreCase);
 
+        internal Config.EventCommunicationConfiguration ActiveEventCommunicationConfiguration { get; } = Config.GlobalConfig.CaptureEventCommunicationConfiguration();
+        private readonly Dictionary<Config.EventTransport, IEventCommunicationModule> transportModules = new Dictionary<Config.EventTransport, IEventCommunicationModule>();
         private ICfet2Logger logger;
         internal CommunicationManager()
         {
@@ -35,7 +37,9 @@ namespace Jtext103.CFET2.Core
 
         public IEventCommunicationModule GetModuleForEvent(string protocol)
         {
-            return eventModuleDict.ContainsKey(protocol.ToLower()) ? eventModuleDict[protocol] : null;
+            if (string.Equals(protocol, "http", StringComparison.OrdinalIgnoreCase))
+                return transportModules.TryGetValue(ActiveEventCommunicationConfiguration.HttpEventSubscriptionTransport, out var selected) ? selected : null;
+            return protocol != null && eventModuleDict.TryGetValue(protocol, out var module) ? module : null;
         }
 
         /// <summary>
@@ -64,9 +68,14 @@ namespace Jtext103.CFET2.Core
         /// <param name="module"></param>
         public void TryAddCommunicationModule(IEventCommunicationModule module)
         {
+            if (module == null) throw new ArgumentNullException(nameof(module));
+            if (module.Transport.HasValue && transportModules.ContainsKey(module.Transport.Value))
+                throw new InvalidOperationException("An event module is already registered for " + module.Transport.Value);
             HubMaster.InjectHubToModule(module);
+            if (module.Transport.HasValue) transportModules.Add(module.Transport.Value, module);
             foreach (var protocol in module.ProtocolNames)
             {
+                if (string.Equals(protocol, "http", StringComparison.OrdinalIgnoreCase)) continue;
                 try
                 {
                     eventModuleDict.Add(protocol.ToLower(), module);
@@ -84,7 +93,7 @@ namespace Jtext103.CFET2.Core
             {
                 item.Start();
             }
-            foreach (var item in eventModuleDict.Values.Distinct())
+            foreach (var item in eventModuleDict.Values.Concat(transportModules.Values).Distinct())
             {
                 item.Start();
             }
@@ -106,13 +115,13 @@ namespace Jtext103.CFET2.Core
         /// <returns></returns>
         internal List<IEventCommunicationModule> GetEventCommunicationModules()
         {
-            var list = eventModuleDict.Values.Distinct().ToList();
+            var list = eventModuleDict.Values.Concat(transportModules.Values).Distinct().ToList();
             return list;
         }
 
         public void Dispose()
         {
-            foreach (var item in eventModuleDict.Values.Distinct())
+            foreach (var item in eventModuleDict.Values.Concat(transportModules.Values).Distinct())
             {
                 item.Dispose();
             }

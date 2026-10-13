@@ -372,6 +372,8 @@ namespace Jtext103.CFET2.Core
                 throw new ProtocolNotSuportedException($"{uri.Scheme} event is not supported");
             }
 
+            // Resolve before the initial HTTP read so unavailable routing or port errors have no read side effects.
+            myMaster.MyEventHub.GetFullHost(uri.Scheme, uri.Host, uri.Port);
             var initialValue = TryGetResourceSampleWithUri(resourceUri);
             ensureValidSubscribeInitialValue(initialValue, resourceUri);
             if (initialValue.ResourceType != ResourceTypes.Status && initialValue.ResourceType != ResourceTypes.Config)
