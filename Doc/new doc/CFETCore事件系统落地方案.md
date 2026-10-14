@@ -4,7 +4,7 @@
 
 本文保留升级目标和实施步骤，步骤中的“建议/需要”不表示该能力仍未实现。当前已实现 Hub 资源订阅、远程初始 Get、WebSocket 服务端资源订阅、资源观测和重连重订阅；测试覆盖与端到端验证应分别说明，本文不作为本次测试通过记录。
 
-- 未标记 `[Cfet2Event]` 的资源仅支持标量自动观测，复杂类型或无法确定标量类型的声明会拒绝资源订阅；完整类型列表见 [Core README](../../README.md#资源自动观测的类型边界)。
+- 未标记 `[Cfet2Event]` 且 getter 无参数的资源支持标量、数组、精确 `List<T>` 和 `Dictionary<TKey, TValue>` 自动观测；容器元素和值递归受支持，字典键限标量。其他复杂类型及无法确定受支持值类型的声明不自动观测；含参数资源可初读并接收主动事件，但不轮询。完整边界见 [Core README](../../README.md#资源自动观测的类型边界)。
 - 原生资源须显式发布；`GetPathFor(nameof(资源成员))` 解析成员特性中的名称和 Thing 实例路径。分离的 Config 方法须在 Set 实现上标记 `[Cfet2Event]`。
 - 远程 `SubscribeResource` 返回只确认初始 Get 与本地订阅注册，不等待远端成功 ACK；后续可能进入 Failed，须查询 WebSocket 诊断或日志。初始读取与注册之间不存在原子性保证。
 - EventHub 关闭行为和配置边界以 [Core README](../../README.md) 为准。

@@ -1,11 +1,11 @@
 # CFETCore升级内容
 
-## 当前实现与阅读边界（2026-10-09）
+## 当前实现与阅读边界（2026-10-14）
 
-本文记录当前工作区的 Core 升级内容，并区分已实现能力、通信接入边界和已知缺陷。当前已实现单资源订阅、远程初始 Get、标量资源自动观察、Core 正则组合订阅及共享观察句柄。现有 WebSocket 精确资源订阅和重连重订阅已存在；Core 正则观察现已接入 WS 服务端，并增加异步准备及 Core 慢 Get 监测。源码实现状态不代表已发布 NuGet 版本，Core 测试与跨模块端到端验收分别说明。
+本文记录当前工作区的 Core 升级内容，并区分已实现能力、通信接入边界和已知缺陷。当前已实现单资源订阅、远程初始 Get、标量及受支持容器资源自动观察、Core 正则组合订阅及共享观察句柄、自动观察列表、公共比较与主动变化发布、minDelta 和宿主通信选择配置。现有 WebSocket 精确资源订阅和重连重订阅已存在；Core 正则观察现已接入 WS 服务端，并增加异步准备及 Core 慢 Get 监测。源码实现状态不代表已发布 NuGet 版本，Core 测试与跨模块端到端验收分别说明。
 
-- 未标记 `[Cfet2Event]` 的资源仅支持标量自动观测。单资源 `SubscribeResource` 对不支持类型抛错；正则组合 `SubscribeResources` 对该资源返回 `Skipped`，其余资源和事件订阅继续。完整类型列表见 [Core README](../../README.md#资源自动观测的类型边界)。
-- **当前带参数 Get 无法正确启动对应参数的自动观察**。普通 Get 支持传参不等于订阅会保存并使用这些参数；具体行为和正则示例见第 9 节。
+- 未标记 `[Cfet2Event]` 且 getter 无参数的资源支持标量、数组、精确 `List<T>` 和 `Dictionary<TKey, TValue>` 自动观测。单资源 `SubscribeResource` 对不支持类型抛错；正则组合 `SubscribeResources` 对该资源返回 `Skipped`，其余资源和事件订阅继续。完整类型列表见 [Core README](../../README.md#资源自动观测的类型边界)。
+- **所有含参数 getter 均不自动观察**，包括默认参数和 params。精确 SubscribeResource 已支持按传入地址读取初值并接收对应路径主动事件；具体行为和正则示例见第 9 节。
 - 资源注册完成即可订阅，不等待 `Start()`。正则只匹配建立时的当前目录，不处理运行中新增、移除或同路径重注册；初始读取失败不自动重试。
 - 原生资源须显式发布；`GetPathFor(nameof(资源成员))` 解析成员特性中的名称和 Thing 实例路径。分离的 Config 方法须在 Set 实现上标记 `[Cfet2Event]`。
 - 远程 `SubscribeResource` 返回只确认初始 Get 与本地订阅注册，不等待远端成功 ACK；后续可能进入 Failed，须查询 WebSocket 诊断或日志。初始读取与注册之间不存在原子性保证。
@@ -15,7 +15,7 @@
 |---|---|
 | Core `netstandard2.0`、测试 `.NET 10` | 已实现 |
 | Hub 单资源订阅与普通事件包装 | 已实现 |
-| 原生事件标记、标量自动观察 | 已实现 |
+| 原生事件标记、标量及受支持容器自动观察 | 已实现 |
 | 通信模块统一注册和路由 | 已实现 |
 | Core 正则资源匹配、组合订阅、独立观察句柄 | 已实现 |
 | 单次正则匹配 100ms 超时及分发隔离 | 已实现 |
@@ -23,7 +23,9 @@
 | WS 精确资源订阅 | 现有能力，本次保持兼容 |
 | WS 正则订阅触发来源端观察 | 已接入，保留精确分支；异步准备、revision 幂等与有界容量已实现 |
 | 观察 Get 慢读监测 | 已实现，默认 100ms Error，独立于正则匹配超时，不强制中止读取 |
-| MQTT 观察租约、WhiteList/BlackList、minDelta、统一通信选择配置 | 不属于本次已实现范围，按后续阶段实施 |
+| AutoObserveList / AutoDenyList、公共比较与主动变化发布、minDelta | 已实现，列表和阈值采用启动快照 |
+| HTTP 事件订阅传输选择、WebSocketPortOffset | 已实现；事件协议冲突在注入与注册表写入前拒绝，失败不留下部分登记 |
+| MQTT 实际通信与观察租约 | 未实现，标准宿主拒绝选择 MQTT |
 
 详细设计与实施记录：[Core 正则资源观察实现文档](<../../Code/CFET2Core/doc/Core 正则资源观察/Core 正则资源观察实现文档.md>)；接入文档：[Core 正则资源观察接入 WS 文档](<../../Code/CFET2Core/doc/Core 正则资源观察/Core 正则资源观察接入WS文档.md>)。
 
@@ -299,11 +301,11 @@ foreach (var result in subscription.ObservationResults)
 
 - 来源和事件类型保留忽略大小写、完整匹配语义；多条条件之间为或，同一条条件的来源与事件类型必须同时命中。
 - 自动观察仅针对匹配 `changed` 的条件；只订阅 alarm 不启动轮询，不能靠轮询替代业务事件。
-- 原生事件、不支持的类型和需要必填读取参数的资源不自动观察；原始事件过滤器仍有效。
+- 原生事件、不支持的类型和所有含参数 getter 的资源不自动观察；原始事件过滤器仍有效。
 - 正则只在订阅建立时匹配一次。注册后即可尝试读取，不等待 Start，不补扫后续注册资源。
 - 初次读取失败返回该资源的 Failed，不建立其观察引用、不后台重试；其他资源和事件订阅继续。全部没有观察句柄也可以保留有效事件订阅。
-- 已建立观察后的临时读取失败继续沿用下一周期读取；首次成功建立观察时只保存基准，后续有效值按 `object.Equals` 判断变化。
-- 默认观察周期为 500ms，通过 `GlobalConfig.ResourceObservationIntervalMs` 配置。当前没有数值容差或 minDelta，也不保证捕获两次采样之间的每次变化。
+- 已建立观察后的临时读取失败继续沿用下一周期读取；首次成功建立观察时只保存基准，后续有效值通过独立快照进行标量或容器内容比较；数值标量使用配置的 minDelta 与上次成功入队的基准比较。
+- 默认观察周期为 500ms，通过 `GlobalConfig.ResourceObservationIntervalMs` 配置。已支持 ResourceMinDelta / ResourceMinDeltaOverrides，默认阈值 0；容器保持内容比较，浮点边界不加 epsilon，也不保证捕获两次采样之间的每次变化。
 
 ### 7.3 生命周期与并发
 
@@ -331,9 +333,9 @@ foreach (var result in subscription.ObservationResults)
 
 ## 9. 当前实现缺陷与使用注意事项
 
-### 9.1 带参数 Get 无法正确启动对应参数的自动观察
+### 9.1 参数化初读与主动事件已支持，参数化自动观察仍不支持
 
-**普通资源 Get 可以传入路由或查询参数，但当前自动观察没有保存读取参数，不能据此观察指定参数对应的值。** 观察内部调用无参 `resource.Get()`，共享键也是资源路径，不是“资源路径 + 参数”。
+**普通 Get 和精确 SubscribeResource 初读可按地址传入参数，但所有含参数 getter 都不进入自动观察。** 后续变化由业务主动发布，精确订阅按调用者提交的完整路径接收。公共 PublishResourceIfChanged 已支持参数路径及独立通道比较基准；这不表示参数化轮询已经实现。无参数观察仍以基础资源路径共享任务。
 
 例如：
 
@@ -347,13 +349,13 @@ public double Temperature(int channel)
 | 调用或来源表达式 | 当前结果 |
 |---|---|
 | 普通 `Get("/device/Temperature/1")` | 可以按普通资源访问规则传入 channel；是否成功取决于资源实现 |
-| 本地 `SubscribeResource("/device/Temperature/1", handler)` | 路径查找可能定位到基础资源，但随后无参读取，没有把 channel 传入；此例初始读取无效，订阅抛错，不能据此启动 channel=1 的观察 |
-| `SubscribeResources(new EventFilter("/device/Temperature", "changed"), handler)` | 匹配到资源，但必填参数检查使结果为 Skipped，原因 `The getter requires arguments.`，没有观察句柄；原始事件订阅保留 |
+| 本地 `SubscribeResource("/device/Temperature/1", handler)` | 按 channel=1 读取一次初值，精确接收该完整路径的主动事件；不建立自动观察 |
+| `SubscribeResources(new EventFilter("/device/Temperature", "changed"), handler)` | 匹配到资源，但含参数 getter 检查使结果为 Skipped，原因 `Parameterized getters require active publication and do not support automatic observation.`，没有观察句柄；原始事件订阅保留 |
 | `SubscribeResources(new EventFilter("/device/Temperature/.*", "changed"), handler)` | 不匹配基础注册路径；此例 ObservationResults 为空，不是 Skipped；事件订阅成功，但不会枚举 channel，也不启动自动观察 |
 
 对于 `/device/Temperature/.*`，业务主动发布 `/device/Temperature/1`、`/device/Temperature/2` 的 changed 仍可被接收；基础路径 `/device/Temperature` 则不匹配该表达式。事件接收成功不代表参数化读取已被观察。
 
-若 getter 所有参数都有默认值，可以无参观察默认参数对应的值，但不会观察传入路径所指定的其他参数值。`/*` 也不是子路径通配符：正则中的 `*` 修饰前面的 `/`，例如 `/device/Temperature/*` 不能匹配 `/device/Temperature/1`。
+即使 getter 所有参数都有默认值，各自动观察入口仍返回 Skipped，不调用 getter；精确 SubscribeResource 可读取默认参数初值，但事件条件保留调用者提交的路径，不自动改写成默认参数详细路径。`/*` 也不是子路径通配符：正则中的 `*` 修饰前面的 `/`，例如 `/device/Temperature/*` 不能匹配 `/device/Temperature/1`。
 
 远端 `SubscribeResource` 初始 Get 即使带参数成功，也不能证明来源端已建立对应参数的观察。本限制影响自动观察，不是禁止普通带参数 Get 或主动事件。
 
@@ -379,7 +381,7 @@ Code review 已复现：标准资源读取把 getter 异常放入无效样本的
 
 后续 WS 接入已完成：首次接入验证为 WS 全量 222、Core 全量 185 项通过，均为 0 失败、0 跳过。新增测试覆盖慢 Get、异步准备、revision 失败幂等、容量拒绝、ACK 重发/重连、客户端 Hub 回调及释放。实际配置、后续验证批次和限制见仓库内 [WS 接入文档第 13 节](<../../Code/CFET2Core/doc/Core 正则资源观察/Core 正则资源观察接入WS文档.md#13-实际实现与验证摘要>)。
 
-自动观察列表已实现：AutoObserveList 在全部组件 Start 成功后持有常驻观察，AutoDenyList 在统一观察入口禁止轮询，两者均不屏蔽主动事件。配置采用启动快照，修改后重启生效。该阶段全量回归 Core 218 项、WS 243 项通过；后续移除配置锁的专项回归 Core 23 项通过。配置、生命周期和测试范围见 [自动观察列表实现方案](../../Code/CFET2Core/doc/自动观察列表/自动观察列表实现方案.md)。minDelta、MQTT 资源租约及宿主通信配置仍属于后续范围。
+自动观察列表已实现：AutoObserveList 在全部组件 Start 成功后持有常驻观察，AutoDenyList 在统一观察入口禁止轮询，两者均不屏蔽主动事件。配置采用启动快照，修改后重启生效。该阶段全量回归 Core 218 项、WS 243 项通过；后续移除配置锁的专项回归 Core 23 项通过。配置、生命周期和测试范围见 [自动观察列表实现方案](../../Code/CFET2Core/doc/自动观察列表/自动观察列表实现方案.md)。minDelta 和宿主通信选择配置已在后续阶段实现，见 [minDelta 使用示例](../../Code/CFET2Core/doc/主动变化发布/minDelta使用示例.md) 和 [通信配置与路由](../../Code/CFET2Core/doc/通信配置与路由/通信配置与HTTP事件订阅路由实现方案.md)。MQTT 实际通信及资源租约仍属于后续范围。
 
 慢 Get 配置为 `ResourceSlowGetThresholdMs`，默认 100ms，执行期间可报警，返回后补耗时；不强制中断、不改变有效结果。WS 准备默认执行并发 4、排队容量 256，满载拒绝且不自动重试。已复现不同重叠 regex 的既有重复回调问题，按已确认边界独立记录，未在本次加入跨聚合去重。
 
@@ -415,4 +417,4 @@ Code review 已复现：标准资源读取把 getter 异常放入无效样本的
 
 已落定：注册后即可订阅，不等待 Start；正则建立时匹配一次；初次失败不自动重试；单资源失败不撤销整个组合订阅；单次正则匹配 100ms；不扩展 WS 观察状态协议。观察周期、相等性比较及事件通信抽象已经有实现，不再列为未确定事项。
 
-尚待实施：第 9 节错误详情修复、重叠正则既有重复路由的独立设计、minDelta、MQTT 资源租约及宿主通信配置。AutoObserveList / AutoDenyList 已完成，不再列入后续范围。带参数 Get 的自动观察当前不支持，若要补齐，需先细化参数实例与事件来源设计。
+尚待实施：第 9 节错误详情修复、重叠正则既有重复路由的独立设计、MQTT 实际通信及资源租约。事件协议冲突注册契约已修正，注册前检查已有协议和模块内重复，http 别名允许共享。AutoObserveList / AutoDenyList、容器比较、PublishResourceIfChanged、minDelta 和宿主通信选择配置已实现，不再列入后续范围。带参数 Get 的自动观察当前不支持，若要补齐，需先细化参数实例与事件来源设计。

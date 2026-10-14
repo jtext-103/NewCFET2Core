@@ -71,19 +71,23 @@ namespace Jtext103.CFET2.Core
             if (module == null) throw new ArgumentNullException(nameof(module));
             if (module.Transport.HasValue && transportModules.ContainsKey(module.Transport.Value))
                 throw new InvalidOperationException("An event module is already registered for " + module.Transport.Value);
-            HubMaster.InjectHubToModule(module);
-            if (module.Transport.HasValue) transportModules.Add(module.Transport.Value, module);
+            var protocols = new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
             foreach (var protocol in module.ProtocolNames)
             {
                 if (string.Equals(protocol, "http", StringComparison.OrdinalIgnoreCase)) continue;
-                try
+                if (string.IsNullOrWhiteSpace(protocol) || !protocols.Add(protocol) || eventModuleDict.ContainsKey(protocol))
                 {
-                    eventModuleDict.Add(protocol.ToLower(), module);
+                    var message = $"Event protocol '{protocol}' conflicts while registering module '{module.GetType().FullName}'.";
+                    logger.Error(message);
+                    throw new InvalidOperationException(message);
                 }
-                catch
-                {
-                    logger.Error($"Try Add IEventCommunicationModule Protocal {protocol} failed!");
-                }
+            }
+            // Validate the entire registration before injection or changing either registry.
+            HubMaster.InjectHubToModule(module);
+            if (module.Transport.HasValue) transportModules.Add(module.Transport.Value, module);
+            foreach (var protocol in protocols)
+            {
+                eventModuleDict.Add(protocol, module);
             }
         }
 
