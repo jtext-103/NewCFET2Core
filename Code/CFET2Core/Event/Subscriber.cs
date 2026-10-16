@@ -17,11 +17,18 @@ namespace Jtext103.CFET2.Core.Event
         /// </summary>
         /// <param name="filter"></param>
         /// <param name="handler"></param>
-        public Subscriber(EventFilter filter, Action<EventArg> handler)
+        public Subscriber(EventFilter filter, Action<EventArg> handler) : this(filter, handler, null)
+        {
+        }
+
+        internal Subscriber(EventFilter filter, Action<EventArg> handler, Communication.IRemoteEventDispatchGuard dispatchGuard)
         {
             Filter = filter;
             Handler = handler;
+            DispatchGuard = dispatchGuard;
         }
+
+        internal Communication.IRemoteEventDispatchGuard DispatchGuard { get; }
 
 
         public EventFilter Filter { get;  }

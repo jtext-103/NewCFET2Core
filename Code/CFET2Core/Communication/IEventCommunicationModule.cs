@@ -16,7 +16,9 @@ namespace Jtext103.CFET2.Core.Communication
         public virtual Config.EventTransport? Transport => null;
 
         /// <summary>
-        /// this is called after all things have been started,you should make sure invoke start twice or more is ok
+        /// Called by Hub.StartCommunication before Hub.StartThings in the standard host.
+        /// Prepare local event reception and register Core observers before returning;
+        /// external connections may continue asynchronously. Repeated calls must be safe.
         /// </summary>
         public virtual void Start()
         {

@@ -18,7 +18,7 @@ namespace Jtext103.CFET2.Core
     /// <summary>
     /// the hub master hold all raw resource, the hub does not, so to control the access right of the hub
     /// </summary>
-    public class HubMaster
+    public partial class HubMaster
     {
         private static HubMaster instance;
         #region props
@@ -39,6 +39,7 @@ namespace Jtext103.CFET2.Core
         internal static void KillMe()
         {
             Cfet2LogManager.StopLogCleanup();
+            instance.CloseLocalObservers();
             instance.MyEventHub.Dispose();
             instance.MyCommunicationManager.Dispose();
             instance = null;

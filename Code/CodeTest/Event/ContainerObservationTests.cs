@@ -107,11 +107,12 @@ namespace Jtext103.CFET2.Core.Test.Event
             var args = new EventArg("/value", "changed", new Status<int[]>(new[] { 1 }));
             Assert.IsFalse((bool)publish.Invoke(hub, new object[] { null }));
             Assert.IsTrue((bool)publish.Invoke(hub, new object[] { args }));
-            var pending = (ConcurrentQueue<EventArg>)typeof(EventHub).GetField("pendingLocalEvent", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(hub);
-            Assert.AreEqual(1, pending.Count);
+            var pending = typeof(EventHub).GetField("pendingLocalEvent", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(hub);
+            var count = pending.GetType().GetProperty("Count");
+            Assert.AreEqual(1, (int)count.GetValue(pending));
             hub.Dispose();
             Assert.IsFalse((bool)publish.Invoke(hub, new object[] { args }));
-            Assert.AreEqual(0, pending.Count);
+            Assert.AreEqual(0, (int)count.GetValue(pending));
         }
 
         [TestMethod]

@@ -19,7 +19,9 @@ namespace Jtext103.CFET2.Core.Communication
         public abstract string[]  ProtocolNames { get; }
 
         /// <summary>
-        /// this is called after all things have been started, you should make sure invoke start twice or more is ok
+        /// Called by Hub.StartCommunication before Hub.StartThings in the standard host.
+        /// Resource readiness is announced separately after Thing startup.
+        /// Repeated calls must be safe.
         /// </summary>
         public virtual void Start()
         {

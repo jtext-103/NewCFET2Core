@@ -138,18 +138,30 @@ namespace Jtext103.CFET2.Core
         /// </summary>
         public void StartThings()
         {
-            addThing(new RootThing(), "/", "root", null, true);
-            myMaster.MyEventHub.ValidateMinDeltaDirectory(myMaster.Resources.Values);
-            for (int i = 0; i < myMaster.thingPathes.Count; i++)
+            var startupMaster = publicationMaster;
+            startupMaster.BeginResourceStartup();
+            try
             {
-                var thing = myMaster.Resources[myMaster.thingPathes[i]];
-                if (thing.ResourceType == ResourceTypes.Thing)
+                startupMaster.MyEventHub.EnsurePublicationOpen();
+                addThing(new RootThing(), "/", "root", null, true);
+                startupMaster.MyEventHub.ValidateMinDeltaDirectory(startupMaster.Resources.Values);
+                for (int i = 0; i < startupMaster.thingPathes.Count; i++)
                 {
-                    (thing as ResourceThing).TheThing.Start();
-                    logger.Info(thing.Name.ToString() + " Started.");
+                    var thing = startupMaster.Resources[startupMaster.thingPathes[i]];
+                    if (thing.ResourceType == ResourceTypes.Thing)
+                    {
+                        (thing as ResourceThing).TheThing.Start();
+                        logger.Info(thing.Name.ToString() + " Started.");
+                    }
                 }
+                startupMaster.MyEventHub.InitializeAutoObservations(startupMaster.Resources.Values);
+                startupMaster.MarkLocalResourcesReady();
             }
-            myMaster.MyEventHub.InitializeAutoObservations(myMaster.Resources.Values);
+            catch
+            {
+                startupMaster.FailLocalResourceStartup();
+                throw;
+            }
         }
 
         /// <summary>
@@ -157,11 +169,13 @@ namespace Jtext103.CFET2.Core
         /// </summary>
         public void DisposeThings()
         {
+            var disposingMaster = publicationMaster;
+            disposingMaster.CloseLocalObservers();
             // Revoke polling before device disposal; already-running synchronous getters cannot be aborted.
-            myMaster.MyEventHub.StopResourceObservations();
-            for (int i = 0; i < myMaster.thingPathes.Count; i++)
+            disposingMaster.MyEventHub.StopResourceObservations();
+            for (int i = 0; i < disposingMaster.thingPathes.Count; i++)
             {
-                var thing = myMaster.Resources[myMaster.thingPathes[i]];
+                var thing = disposingMaster.Resources[disposingMaster.thingPathes[i]];
                 if (thing.ResourceType == ResourceTypes.Thing)
                 {
                     var theThing = (thing as ResourceThing).TheThing as IDisposable;

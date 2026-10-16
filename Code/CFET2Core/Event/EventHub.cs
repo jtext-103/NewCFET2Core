@@ -68,10 +68,9 @@ namespace Jtext103.CFET2.Core.Event
                 {
                     return;
                 }
-                EventArg eventArg;
-                while (!cancelToken.IsCancellationRequested && pendingLocalEvent.TryDequeue(out eventArg))
+                while (!cancelToken.IsCancellationRequested && pendingLocalEvent.TryDequeue(out var pending))
                 {
-                    handleLocalEvent(eventArg);
+                    handleLocalEvent(pending.Event, pending.DeliverToObservers);
                 }
             }
         }
@@ -93,7 +92,7 @@ namespace Jtext103.CFET2.Core.Event
             }
         }
 
-        private void handleLocalEvent(EventArg eventArg)
+        private void handleLocalEvent(EventArg eventArg, bool deliverToObservers)
         {
             if (eventArg == null)
             {
@@ -101,6 +100,7 @@ namespace Jtext103.CFET2.Core.Event
                 return;
             }
 
+            if (deliverToObservers) NotifyLocalEventObservers(eventArg);
             foreach (var candidate in getLocalCandidates(eventArg))
             {
                 var subscriber = candidate.Value;
@@ -162,7 +162,16 @@ namespace Jtext103.CFET2.Core.Event
         private long lastRegexTimeoutWarning;
 
 
-        ConcurrentQueue<EventArg> pendingLocalEvent = new ConcurrentQueue<EventArg>();
+        // Admission is captured under lifecycleLock, so pre-start events never become
+        // observer events just because the queue is consumed after StartThings begins.
+        private readonly struct PendingLocalEvent
+        {
+            internal readonly EventArg Event;
+            internal readonly bool DeliverToObservers;
+            internal PendingLocalEvent(EventArg ev, bool deliverToObservers)
+            { Event = ev; DeliverToObservers = deliverToObservers; }
+        }
+        ConcurrentQueue<PendingLocalEvent> pendingLocalEvent = new ConcurrentQueue<PendingLocalEvent>();
         ConcurrentQueue<EventArg> pendingRemoteEvent = new ConcurrentQueue<EventArg>();
 
 
@@ -239,14 +248,14 @@ namespace Jtext103.CFET2.Core.Event
                     sample.Context[SampleBase<object>.KeyOfVal] = eventArg.Sample.ObjectVal;
                     sample.Timestamp = eventArg.Sample.Timestamp ?? publishedAt;
                 }
-                pendingLocalEvent.Enqueue(new EventArg
+                pendingLocalEvent.Enqueue(new PendingLocalEvent(new EventArg
                 {
                     Source = eventArg.Source,
                     EventType = eventArg.EventType,
                     Host = eventArg.Host,
                     PerformanceLevel = eventArg.PerformanceLevel,
                     Sample = sample,
-                });
+                }, localEventObserversStarted && !localEventObserversClosed));
                 newLocalPendingEvent();
                 return true;
             }
@@ -320,7 +329,8 @@ namespace Jtext103.CFET2.Core.Event
                     var remoteToken = new Token(this, protocol, filter.Host);
                     try
                     {
-                        var subscriber = new Subscriber(filter, handler);
+                        var subscriber = new Subscriber(filter, handler,
+                            eventModule as Communication.IRemoteEventDispatchGuard);
                         lock (lifecycleLock)
                         {
                             ThrowIfDisposed();
@@ -523,6 +533,7 @@ namespace Jtext103.CFET2.Core.Event
             {
                 if (disposed) return;
                 disposed = true;
+                CloseLocalEventObservers();
                 publicationSlots.Clear();
                 tokenSource.Cancel();
                 newLocalPendingEvent();
@@ -698,12 +709,26 @@ namespace Jtext103.CFET2.Core.Event
             if (disposed) return;
             lock (remoteSubLock)
             {
-                if (!remoteSubDict.ContainsKey(tokenId))
+                if (!remoteSubDict.TryGetValue(tokenId, out var current) || !ReferenceEquals(current, subscriber))
                 {
                     return;
                 }
             }
 
+            try
+            {
+                if (subscriber.DispatchGuard != null && !subscriber.DispatchGuard.ShouldDispatch(tokenId, eventArg)) return;
+            }
+            catch (System.Exception ex)
+            {
+                logger.Error($"Remote event dispatch guard failed for Token {tokenId}, Host {subscriber.Filter.Host} ({ex.GetType().Name}); delivery skipped.");
+                return;
+            }
+            // External code may block while this Token/Core is closed. Recheck after it returns.
+            lock (remoteSubLock)
+            {
+                if (disposed || !remoteSubDict.TryGetValue(tokenId, out var current) || !ReferenceEquals(current, subscriber)) return;
+            }
             invokeHandler(subscriber, eventArg);
         }
 
