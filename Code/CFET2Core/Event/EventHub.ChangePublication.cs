@@ -37,8 +37,8 @@ namespace Jtext103.CFET2.Core.Event
                     EnsurePublicationOpen();
                     return false;
                 }
-                var sample = new Status<object>(current.CreateEventValue()) { Timestamp = timestamp };
-                if (!TryPublish(new EventArg(path, "changed", sample))) throw new ObjectDisposedException(nameof(EventHub));
+                var sample = new Status<object>(current.CreateEventValue()) { Timestamp = timestamp ?? DateTimeOffset.UtcNow };
+                if (!TryEnqueuePrepared(new EventArg(path, "changed", sample))) throw new ObjectDisposedException(nameof(EventHub));
                 slot.Baseline = current;
                 return true;
             }

@@ -20,9 +20,8 @@ namespace Jtext103.CFET2.Core
 
     public partial class HubMaster
     {
-        // Registration, readiness and EventHub shutdown share one lock order.
-        // Publish can evaluate a sample under this same lifecycle lock; a separate gate
-        // would deadlock if that sample queries readiness while registration waits for EventHub.
+        // Registration, readiness, event admission and shutdown share one short state lock.
+        // Sample evaluation and all application callbacks run outside it.
         private object resourceReadinessLock => MyEventHub.ObserverRegistrationLock;
         private readonly List<Action> resourceReadyObservers = new List<Action>();
         private Action[] fixedResourceReadyObservers = Array.Empty<Action>();

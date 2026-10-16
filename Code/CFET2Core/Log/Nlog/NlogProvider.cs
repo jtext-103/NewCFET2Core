@@ -62,6 +62,12 @@ namespace Jtext103.CFET2.Core.Log
 
         public static void StartRetentionScheduler()
         {
+            StartRetentionScheduler(RunRetentionCleanupSafe);
+        }
+
+        internal static void StartRetentionScheduler(Action cleanup)
+        {
+            if (cleanup == null) throw new ArgumentNullException(nameof(cleanup));
             lock (retentionScheduleLock)
             {
                 var days = GetConfiguredRetentionDays();
@@ -76,8 +82,9 @@ namespace Jtext103.CFET2.Core.Log
                     return;
                 }
 
-                RunRetentionCleanupSafe();
-                retentionCleanupTimer = new Timer(_ => RunRetentionCleanupSafe(), null, TimeSpan.FromDays(1), TimeSpan.FromDays(1));
+                // Install the scheduler before releasing the lock, so Stop cannot race a
+                // late timer installation. File I/O is performed by the timer, outside it.
+                retentionCleanupTimer = new Timer(_ => cleanup(), null, TimeSpan.Zero, TimeSpan.FromDays(1));
             }
         }
 

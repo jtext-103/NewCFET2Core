@@ -152,10 +152,11 @@ namespace Jtext103.CFET2.Core.Event
         /// </summary>
         Dictionary<Guid, Subscriber> localSubDict { get; } = new Dictionary<Guid, Event.Subscriber>();
         Dictionary<Guid, Subscriber> remoteSubDict { get; } = new Dictionary<Guid, Event.Subscriber>();
-        Dictionary<string, List<Guid>> localRouteTable { get; } = new Dictionary<string, List<Guid>>(StringComparer.InvariantCultureIgnoreCase);
-        Dictionary<string, List<Guid>> remoteRouteTable { get; } = new Dictionary<string, List<Guid>>(StringComparer.InvariantCultureIgnoreCase);
-        List<Guid> localFallbackRoutes { get; } = new List<Guid>();
-        List<Guid> remoteFallbackRoutes { get; } = new List<Guid>();
+        // Buckets are immutable snapshots, replaced only when subscriptions change.
+        Dictionary<string, KeyValuePair<Guid, Subscriber>[]> localRouteTable { get; } = new Dictionary<string, KeyValuePair<Guid, Subscriber>[]>(StringComparer.InvariantCultureIgnoreCase);
+        Dictionary<string, KeyValuePair<Guid, Subscriber>[]> remoteRouteTable { get; } = new Dictionary<string, KeyValuePair<Guid, Subscriber>[]>(StringComparer.InvariantCultureIgnoreCase);
+        KeyValuePair<Guid, Subscriber>[] localFallbackRoutes { get; set; } = Array.Empty<KeyValuePair<Guid, Subscriber>>();
+        KeyValuePair<Guid, Subscriber>[] remoteFallbackRoutes { get; set; } = Array.Empty<KeyValuePair<Guid, Subscriber>>();
         private readonly object localSubLock = new object();
         private readonly object remoteSubLock = new object();
         private readonly Dictionary<Guid, ObservationHandleGroup> observationGroups = new Dictionary<Guid, ObservationHandleGroup>();
@@ -235,27 +236,36 @@ namespace Jtext103.CFET2.Core.Event
                 return false;
             }
 
+            if (disposed) return false;
+            // Sample access can execute application code (including a virtual Val getter).
+            // Prepare it before admission; shutdown/startup may proceed while it is evaluated.
+            var prepared = new EventArg
+            {
+                Source = eventArg.Source,
+                EventType = eventArg.EventType,
+                Host = eventArg.Host,
+                PerformanceLevel = eventArg.PerformanceLevel,
+            };
+            var originalSample = eventArg.Sample;
+            if (originalSample != null)
+            {
+                var sample = new SampleBase<object>(originalSample.Context);
+                sample.Context[SampleBase<object>.KeyOfVal] = originalSample.ObjectVal;
+                sample.Timestamp = originalSample.Timestamp ?? publishedAt;
+                prepared.Sample = sample;
+            }
+            return TryEnqueuePrepared(prepared);
+        }
+
+        // Ownership is transferred on success. Only Core-created, fully evaluated events
+        // may use this boundary; callers must not subsequently mutate their metadata/context.
+        internal bool TryEnqueuePrepared(EventArg prepared)
+        {
             lock (lifecycleLock)
             {
                 if (disposed) return false;
-                // Freeze event metadata and the context, without stamping the caller's sample.
-                // Reusing an unstamped sample for another publication must get a fresh time.
-                ISample sample = null;
-                if (eventArg.Sample != null)
-                {
-                    sample = new SampleBase<object>(eventArg.Sample.Context);
-                    // Preserve the source sample's evaluated value, including generic conversion.
-                    sample.Context[SampleBase<object>.KeyOfVal] = eventArg.Sample.ObjectVal;
-                    sample.Timestamp = eventArg.Sample.Timestamp ?? publishedAt;
-                }
-                pendingLocalEvent.Enqueue(new PendingLocalEvent(new EventArg
-                {
-                    Source = eventArg.Source,
-                    EventType = eventArg.EventType,
-                    Host = eventArg.Host,
-                    PerformanceLevel = eventArg.PerformanceLevel,
-                    Sample = sample,
-                }, localEventObserversStarted && !localEventObserversClosed));
+                pendingLocalEvent.Enqueue(new PendingLocalEvent(prepared,
+                    localEventObserversStarted && !localEventObserversClosed));
                 newLocalPendingEvent();
                 return true;
             }
@@ -551,14 +561,14 @@ namespace Jtext103.CFET2.Core.Event
                 observationGroups.Clear();
                 localSubDict.Clear();
                 localRouteTable.Clear();
-                localFallbackRoutes.Clear();
+                localFallbackRoutes = Array.Empty<KeyValuePair<Guid, Subscriber>>();
             }
             foreach (var group in groups) group.Dispose();
             lock (remoteSubLock)
             {
                 remoteSubDict.Clear();
                 remoteRouteTable.Clear();
-                remoteFallbackRoutes.Clear();
+                remoteFallbackRoutes = Array.Empty<KeyValuePair<Guid, Subscriber>>();
             }
             // Never wait under a subscription/lifecycle lock or wait for user handlers.
             // A pathological filter/logger must not block shutdown indefinitely.
@@ -635,59 +645,34 @@ namespace Jtext103.CFET2.Core.Event
             return normalizedHost.ToLowerInvariant().TrimEnd('/');
         }
 
-        private List<KeyValuePair<Guid, Subscriber>> getLocalCandidates(EventArg eventArg)
+        private IEnumerable<KeyValuePair<Guid, Subscriber>> getLocalCandidates(EventArg eventArg)
         {
+            var key = makeLocalRouteKey(eventArg.Source, eventArg.EventType);
             lock (localSubLock)
             {
-                return getCandidateSubscribers(
-                    localSubDict,
-                    localRouteTable,
-                    localFallbackRoutes,
-                    makeLocalRouteKey(eventArg.Source, eventArg.EventType));
+                localRouteTable.TryGetValue(key, out var routed);
+                return getCandidateSubscribers(routed, localFallbackRoutes);
             }
         }
 
-        private List<KeyValuePair<Guid, Subscriber>> getRemoteCandidates(EventArg eventArg)
+        private IEnumerable<KeyValuePair<Guid, Subscriber>> getRemoteCandidates(EventArg eventArg)
         {
+            var key = makeRemoteRouteKey(eventArg.Host, eventArg.Source, eventArg.EventType);
             lock (remoteSubLock)
             {
-                return getCandidateSubscribers(
-                    remoteSubDict,
-                    remoteRouteTable,
-                    remoteFallbackRoutes,
-                    makeRemoteRouteKey(eventArg.Host, eventArg.Source, eventArg.EventType));
+                remoteRouteTable.TryGetValue(key, out var routed);
+                return getCandidateSubscribers(routed, remoteFallbackRoutes);
             }
         }
 
-        private static List<KeyValuePair<Guid, Subscriber>> getCandidateSubscribers(
-            Dictionary<Guid, Subscriber> subscribers,
-            Dictionary<string, List<Guid>> routeTable,
-            List<Guid> fallbackRoutes,
-            string routeKey)
+        private static IEnumerable<KeyValuePair<Guid, Subscriber>> getCandidateSubscribers(
+            KeyValuePair<Guid, Subscriber>[] routed,
+            KeyValuePair<Guid, Subscriber>[] fallback)
         {
-            var ids = new HashSet<Guid>();
-            if (routeTable.TryGetValue(routeKey, out var routedIds))
-            {
-                foreach (var id in routedIds)
-                {
-                    ids.Add(id);
-                }
-            }
-
-            foreach (var id in fallbackRoutes)
-            {
-                ids.Add(id);
-            }
-
-            var result = new List<KeyValuePair<Guid, Subscriber>>();
-            foreach (var id in ids)
-            {
-                if (subscribers.TryGetValue(id, out var subscriber))
-                {
-                    result.Add(new KeyValuePair<Guid, Subscriber>(id, subscriber));
-                }
-            }
-            return result;
+            // Iteration takes place after the subscription lock is released. A token is
+            // either exact or fallback, and each exact bucket contains it only once.
+            if (routed != null) foreach (var candidate in routed) yield return candidate;
+            foreach (var candidate in fallback) yield return candidate;
         }
 
         private void invokeLocalHandlerIfSubscribed(Guid tokenId, Subscriber subscriber, EventArg eventArg)
@@ -768,72 +753,75 @@ namespace Jtext103.CFET2.Core.Event
 
         private void addLocalRoutes(Guid tokenId, Subscriber subscriber)
         {
-            addRoutes(localRouteTable, localFallbackRoutes, tokenId, subscriber, null);
+            localFallbackRoutes = addRoutes(localRouteTable, localFallbackRoutes, tokenId, subscriber, null);
         }
 
         private void addRemoteRoutes(Guid tokenId, Subscriber subscriber)
         {
-            addRoutes(remoteRouteTable, remoteFallbackRoutes, tokenId, subscriber, subscriber.Filter.Host);
+            remoteFallbackRoutes = addRoutes(remoteRouteTable, remoteFallbackRoutes, tokenId, subscriber, subscriber.Filter.Host);
         }
 
         private void removeLocalRoutes(Guid tokenId, Subscriber subscriber)
         {
-            removeRoutes(localRouteTable, localFallbackRoutes, tokenId, subscriber, null);
+            localFallbackRoutes = removeRoutes(localRouteTable, localFallbackRoutes, tokenId, subscriber, null);
         }
 
         private void removeRemoteRoutes(Guid tokenId, Subscriber subscriber)
         {
-            removeRoutes(remoteRouteTable, remoteFallbackRoutes, tokenId, subscriber, subscriber.Filter.Host);
+            remoteFallbackRoutes = removeRoutes(remoteRouteTable, remoteFallbackRoutes, tokenId, subscriber, subscriber.Filter.Host);
         }
 
-        private static void addRoutes(
-            Dictionary<string, List<Guid>> routeTable,
-            List<Guid> fallbackRoutes,
+        private static KeyValuePair<Guid, Subscriber>[] addRoutes(
+            Dictionary<string, KeyValuePair<Guid, Subscriber>[]> routeTable,
+            KeyValuePair<Guid, Subscriber>[] fallbackRoutes,
             Guid tokenId,
             Subscriber subscriber,
             string host)
         {
             if (!tryGetExactRouteKeys(subscriber.Filter, host, out var routeKeys))
             {
-                fallbackRoutes.Add(tokenId);
-                return;
+                return appendRoute(fallbackRoutes, tokenId, subscriber);
             }
 
-            foreach (var routeKey in routeKeys)
+            foreach (var routeKey in routeKeys.Distinct(StringComparer.InvariantCultureIgnoreCase))
             {
-                if (!routeTable.TryGetValue(routeKey, out var tokenIds))
-                {
-                    tokenIds = new List<Guid>();
-                    routeTable.Add(routeKey, tokenIds);
-                }
-                tokenIds.Add(tokenId);
+                routeTable.TryGetValue(routeKey, out var candidates);
+                routeTable[routeKey] = appendRoute(candidates, tokenId, subscriber);
             }
+            return fallbackRoutes;
         }
 
-        private static void removeRoutes(
-            Dictionary<string, List<Guid>> routeTable,
-            List<Guid> fallbackRoutes,
+        private static KeyValuePair<Guid, Subscriber>[] appendRoute(KeyValuePair<Guid, Subscriber>[] current, Guid id, Subscriber subscriber)
+        {
+            var length = current?.Length ?? 0;
+            var updated = new KeyValuePair<Guid, Subscriber>[length + 1];
+            if (length != 0) Array.Copy(current, updated, length);
+            updated[length] = new KeyValuePair<Guid, Subscriber>(id, subscriber);
+            return updated;
+        }
+
+        private static KeyValuePair<Guid, Subscriber>[] removeRoutes(
+            Dictionary<string, KeyValuePair<Guid, Subscriber>[]> routeTable,
+            KeyValuePair<Guid, Subscriber>[] fallbackRoutes,
             Guid tokenId,
             Subscriber subscriber,
             string host)
         {
             if (!tryGetExactRouteKeys(subscriber.Filter, host, out var routeKeys))
             {
-                fallbackRoutes.Remove(tokenId);
-                return;
+                return fallbackRoutes.Where(candidate => candidate.Key != tokenId).ToArray();
             }
 
-            foreach (var routeKey in routeKeys)
+            foreach (var routeKey in routeKeys.Distinct(StringComparer.InvariantCultureIgnoreCase))
             {
-                if (routeTable.TryGetValue(routeKey, out var tokenIds))
+                if (routeTable.TryGetValue(routeKey, out var candidates))
                 {
-                    tokenIds.Remove(tokenId);
-                    if (tokenIds.Count == 0)
-                    {
-                        routeTable.Remove(routeKey);
-                    }
+                    var updated = candidates.Where(candidate => candidate.Key != tokenId).ToArray();
+                    if (updated.Length == 0) routeTable.Remove(routeKey);
+                    else routeTable[routeKey] = updated;
                 }
             }
+            return fallbackRoutes;
         }
 
         private static bool tryGetExactRouteKeys(EventFilter filter, string host, out List<string> routeKeys)

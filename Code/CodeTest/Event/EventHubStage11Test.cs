@@ -143,16 +143,16 @@ namespace Jtext103.CFET2.Core.Test.Event
             unmatchedCount.Should().Be(0);
         }
 
-        private static Dictionary<string, List<Guid>> GetRouteTable(EventHub hub, string propertyName)
+        private static Dictionary<string, KeyValuePair<Guid, Subscriber>[]> GetRouteTable(EventHub hub, string propertyName)
         {
-            return (Dictionary<string, List<Guid>>)typeof(EventHub)
+            return (Dictionary<string, KeyValuePair<Guid, Subscriber>[]>)typeof(EventHub)
                 .GetProperty(propertyName, BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(hub);
         }
 
-        private static List<Guid> GetFallbackRoutes(EventHub hub, string propertyName)
+        private static IReadOnlyList<KeyValuePair<Guid, Subscriber>> GetFallbackRoutes(EventHub hub, string propertyName)
         {
-            return (List<Guid>)typeof(EventHub)
+            return (KeyValuePair<Guid, Subscriber>[])typeof(EventHub)
                 .GetProperty(propertyName, BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(hub);
         }

@@ -9,22 +9,27 @@ namespace Jtext103.CFET2.Core.Event
     public partial class EventHub
     {
         private readonly ResourceChangePublicationConfiguration changePublicationConfiguration;
+        private readonly object thresholdValidationLock = new object();
         private bool thresholdDirectoryChecked;
         internal double ResolveMinDelta(ResourceBase resource) => changePublicationConfiguration.ResolveMinDelta(resource);
 
         internal void ValidateMinDeltaDirectory(IEnumerable<ResourceBase> resources)
         {
-            lock (lifecycleLock)
+            string[] missing;
+            // Concurrent callers wait for directory validation, without blocking publication.
+            lock (thresholdValidationLock)
             {
-                ThrowIfDisposed();
+                lock (lifecycleLock) ThrowIfDisposed();
                 if (thresholdDirectoryChecked) return;
+                var paths = new HashSet<string>(resources
+                    .Where(resource => resource.ResourceType == ResourceTypes.Status || resource.ResourceType == ResourceTypes.Config)
+                    .Select(resource => resource.Path), System.StringComparer.InvariantCultureIgnoreCase);
+                missing = changePublicationConfiguration.Paths.Where(path => !paths.Contains(path)).ToArray();
+                lock (lifecycleLock) ThrowIfDisposed();
                 thresholdDirectoryChecked = true;
-                var directory = resources.ToArray();
-                foreach (var path in changePublicationConfiguration.Paths)
-                    if (!directory.Any(resource => System.StringComparer.InvariantCultureIgnoreCase.Equals(resource.Path, path) &&
-                        (resource.ResourceType == ResourceTypes.Status || resource.ResourceType == ResourceTypes.Config)))
-                        logger.Warn("ResourceMinDeltaOverrides path matched no local Status/Config base resource: " + path);
             }
+            foreach (var path in missing)
+                logger.Warn("ResourceMinDeltaOverrides path matched no local Status/Config base resource: " + path);
         }
     }
 }

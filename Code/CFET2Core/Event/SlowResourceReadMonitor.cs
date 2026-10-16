@@ -25,10 +25,33 @@ namespace Jtext103.CFET2.Core.Event
             public void Dispose() => Interlocked.Exchange(ref Owner, null)?.End(this);
         }
         private sealed class Rate { internal double Last; internal int Suppressed; }
+        // Capture only immutable diagnostic data under sync. Formatting is deferred to Tick.
+        private readonly struct Message
+        {
+            private readonly string path, stage, state;
+            private readonly long id;
+            private readonly double elapsed, threshold;
+            private readonly int suppressed;
+            internal Message(Read read, double time, string state, int suppressed = 0)
+            {
+                path = read.Path; stage = read.Stage; id = read.Id;
+                elapsed = time - read.Start; threshold = read.Threshold;
+                this.state = state; this.suppressed = suppressed;
+            }
+            internal Message(string path, int suppressed)
+            {
+                this.path = path; this.suppressed = suppressed;
+                stage = null; state = "summary"; id = 0; elapsed = threshold = 0;
+            }
+            public override string ToString() => state == "summary"
+                ? $"Resource Get slow summary: path={path}, suppressed={suppressed}"
+                : $"Resource Get {state}: path={path}, stage={stage}, read={id}, " +
+                  $"elapsedMs={elapsed:F1}, thresholdMs={threshold:F1}, suppressed={suppressed}";
+        }
         private readonly object sync = new object();
         private readonly Dictionary<long, Read> reads = new Dictionary<long, Read>();
         private readonly Dictionary<string, Rate> rates = new Dictionary<string, Rate>(StringComparer.OrdinalIgnoreCase);
-        private readonly Queue<string> messages = new Queue<string>();
+        private readonly Queue<Message> messages = new Queue<Message>();
         private readonly Func<double> now;
         private readonly Action<string> log;
         private readonly Timer timer;
@@ -64,11 +87,8 @@ namespace Jtext103.CFET2.Core.Event
             var suppressed = rate?.Suppressed ?? 0;
             rates[read.Path] = new Rate { Last = time };
             read.Reported = true;
-            messages.Enqueue(Format(read, time, "slow", suppressed));
+            messages.Enqueue(new Message(read, time, "slow", suppressed));
         }
-        private static string Format(Read read, double time, string state, int suppressed = 0) =>
-            $"Resource Get {state}: path={read.Path}, stage={read.Stage}, read={read.Id}, " +
-            $"elapsedMs={time - read.Start:F1}, thresholdMs={read.Threshold:F1}, suppressed={suppressed}";
         private void End(Read read)
         {
             lock (sync)
@@ -76,7 +96,7 @@ namespace Jtext103.CFET2.Core.Event
                 if (!reads.Remove(read.Id)) return;
                 var time = now();
                 Check(read, time);
-                if (read.Reported) messages.Enqueue(Format(read, time, "completed"));
+                if (read.Reported) messages.Enqueue(new Message(read, time, "completed"));
             }
         }
         internal int ActiveCount { get { lock (sync) return reads.Count; } }
@@ -85,7 +105,7 @@ namespace Jtext103.CFET2.Core.Event
             if (Interlocked.Exchange(ref ticking, 1) != 0) return;
             try
             {
-                string[] output;
+                Message[] output;
                 lock (sync)
                 {
                     if (disposed) return;
@@ -94,14 +114,14 @@ namespace Jtext103.CFET2.Core.Event
                     foreach (var item in rates.Where(p => time - p.Value.Last >= 1000).ToArray())
                     {
                         if (item.Value.Suppressed > 0)
-                            messages.Enqueue($"Resource Get slow summary: path={item.Key}, suppressed={item.Value.Suppressed}");
+                            messages.Enqueue(new Message(item.Key, item.Value.Suppressed));
                         rates.Remove(item.Key);
                     }
                     output = messages.ToArray();
                     messages.Clear();
                 }
                 foreach (var message in output)
-                    try { log(message); } catch { /* Diagnostics must not break resource observation. */ }
+                    try { log(message.ToString()); } catch { /* Diagnostics must not break resource observation. */ }
             }
             finally { Volatile.Write(ref ticking, 0); }
         }
