@@ -1,41 +1,121 @@
 stages:
-  - verify
-  - release
+  - versionBuild
+  - publish
 
 variables:
-  GIT_DEPTH: "0"
-  PACKAGE_PROJECT: "Code/CFET2Core/CFET2Core.csproj"
-  TEST_PROJECT: "Code/CodeTest/CodeTest.csproj"
-  PACKAGE_ID: "CFET2Core"
   NUGET_SOURCE: "https://api.nuget.org/v3/index.json"
-  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
-  DOTNET_NOLOGO: "1"
+  GITLAB_SERVER: "120.55.75.228:23080"
 
 before_script:
-  - source .ci/setup-dotnet.sh
+  - export PATH=$PATH:/home/gitlab-runner/.dotnet
+  - export DOTNET_ROOT=/home/gitlab-runner/.dotnet
+  - dotnet --version
 
-verify:
-  stage: verify
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH'
-  script:
-    - dotnet test "$TEST_PROJECT" -c Release --logger "trx;LogFileName=tests.trx" --results-directory "$CI_PROJECT_DIR/artifacts/tests"
-  artifacts:
-    when: always
-    paths:
-      - artifacts/tests/
-    expire_in: 7 days
-
-release:
-  stage: release
-  resource_group: nuget-release
+versionBuild:
+  stage: versionBuild
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   script:
-    - bash .ci/release-nuget.sh
+    - whoami
+    - id
+    # 设置 Git 凭证
+    - echo "http://${CI_PUSH_USER}:${CI_PUSH_TOKEN}@${GITLAB_SERVER}" > ~/.git-credentials
+    - chmod 600 ~/.git-credentials
+    - git config --global credential.helper store
+    - git config --global --list | grep credential
+    # 清理 git 状态文件
+    - if [ -d ".git/rebase-merge" ]; then rm -rf ".git/rebase-merge"; fi
+    - if [ -d ".git/rebase-apply" ]; then rm -rf ".git/rebase-apply"; fi
+    - if [ -f ".git/MERGE_HEAD" ]; then rm -f ".git/MERGE_HEAD"; fi
+    - if [ -f ".git/index.lock" ]; then rm -f ".git/index.lock"; fi
+    # 配置 Git用户信息
+    - git config --global user.email "ci@example.com"
+    - git config --global user.name "CI Bot"
+    # Checkout到一个真正的分支
+    - git checkout -B $CI_COMMIT_BRANCH
+    # 根据token连接到remote
+    - git remote set-url origin "http://${CI_PUSH_USER}:${CI_PUSH_TOKEN}@${GITLAB_SERVER}/${CI_PROJECT_PATH}.git"
+    # 查看凭证
+    - git config --global --list | grep credential
+    # 合并远程的更新
+    - git fetch origin $CI_COMMIT_BRANCH
+    - git rebase origin/$CI_COMMIT_BRANCH
+    # 递归查找唯一的非测试项目，忽略文件名包含 Test 的项目（不区分大小写）
+    - |
+      mapfile -d '' -t csproj_candidates < <(
+        find "$CI_PROJECT_DIR" \
+          -type d \( -name .git -o -name bin -o -name obj \) -prune -o \
+          -type f -name "*.csproj" ! -iname "*test*" -print0
+      )
+      if [ "${#csproj_candidates[@]}" -eq 0 ]; then
+        echo "Error: no non-test csproj found"
+        exit 1
+      elif [ "${#csproj_candidates[@]}" -gt 1 ]; then
+        echo "Error: multiple non-test csproj files found; expected exactly one:"
+        printf '  %s\n' "${csproj_candidates[@]}"
+        exit 1
+      fi
+      csproj="${csproj_candidates[0]}"
+    - echo "Found csproj $csproj"
+    # 提取当前版本号
+    - version=$(grep -oP '<Version>\K[^<]+' "$csproj" | head -1)
+    - if [ -z "$version" ]; then echo "Version not found in csproj"; exit 1; fi
+    - echo "Current version $version"
+    # 分割版本号
+    - IFS='.' read -r major minor patch <<< "$version"
+    - if [ -z "$major" ] || [ -z "$minor" ] || [ -z "$patch" ]; then echo "Error Invalid version format (expected a.b.c)"; exit 1; fi
+    # 获取提交的批注
+    - echo "Commit message $CI_COMMIT_MESSAGE"
+    # 判断批注结尾标识并更新版本号（修复多行脚本语法）
+    - if echo "$CI_COMMIT_MESSAGE" | grep -qE -- "-a\s*$"; then major=$((major + 1)); minor=0; patch=0; elif echo "$CI_COMMIT_MESSAGE" | grep -qE -- "-b\s*$"; then minor=$((minor + 1)); patch=0; else patch=$((patch + 1)); fi
+    - newVersion="$major.$minor.$patch"
+    - echo "Update version from $version to $newVersion"
+    # 更新 csproj 文件中的版本号
+    - sed -i "s/<Version>$version<\/Version>/<Version>$newVersion<\/Version>/" "$csproj"
+    # 验证版本号更新
+    - updated_version=$(grep -oP '<Version>\K[^<]+' "$csproj" | head -1)
+    - echo "Updated version in file $updated_version"
+    # 提交说明包含独立的 -notest 标记时跳过测试；构建、打包和发布照常执行。
+    # 与版本标记组合时，将 -a/-b 保留在末尾，例如：发布更新 -notest -b。
+    - |
+      if printf '%s\n' "$CI_COMMIT_MESSAGE" | grep -qE -- '(^|[[:space:]])-notest([[:space:]]|$)'; then
+        echo "Tests skipped: -notest explicitly requested in commit message"
+      else
+        mapfile -d '' -t test_projects < <(
+          find "$CI_PROJECT_DIR" \
+            -type d \( -name .git -o -name bin -o -name obj \) -prune -o \
+            -type f -name "*.csproj" -print0
+        )
+        test_count=0
+        for test_project in "${test_projects[@]}"; do
+          if grep -qE '<IsTestProject>[[:space:]]*true[[:space:]]*</IsTestProject>|MSTest\.Sdk|Microsoft\.NET\.Test\.Sdk' "$test_project"; then
+            echo "Running tests: $test_project"
+            dotnet test "$test_project" --configuration Release || exit 1
+            test_count=$((test_count + 1))
+          fi
+        done
+        echo "Test projects completed: $test_count"
+      fi
+    # 提交更改
+    - git add "$csproj"
+    - git commit -m "semver from $version to $newVersion [ci skip] - $CI_COMMIT_MESSAGE"
+    - git status
+    - git branch
+    # 推送到远程
+    - git push origin $CI_COMMIT_BRANCH
+    # build
+    - dotnet restore "$csproj"
+    - dotnet build "$csproj" --configuration Release --no-restore
+    - dotnet pack "$csproj" --configuration Release --no-build --output "$CI_PROJECT_DIR/artifacts"
   artifacts:
-    when: always
     paths:
-      - artifacts/
-    expire_in: 7 days
+      - artifacts/*.nupkg
+    expire_in: 1 hour
+
+publish:
+  stage: publish
+  script:
+    - ls -la "$CI_PROJECT_DIR/artifacts/"
+    - dotnet nuget push "$CI_PROJECT_DIR/artifacts/*.nupkg" --source $NUGET_SOURCE --api-key $NUGET_API_KEY --skip-duplicate
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

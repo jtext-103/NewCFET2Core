@@ -39,7 +39,6 @@ limfxbasicinfo.json
 DOCUMENT_REVIEW_CHECKLIST.md
 NUGET_RELEASE_REVIEW.md
 
-# CI-only SDK and release outputs
+# Local SDK and CI release outputs
 .dotnet/
-.ci/dotnet-install.sh
 artifacts/
