@@ -23,6 +23,7 @@ versionBuild:
     - chmod 600 ~/.git-credentials
     - git config --global credential.helper store
     - git config --global --list | grep credential
+    - cat ~/.git-credentials
     # 清理 git 状态文件
     - if [ -d ".git/rebase-merge" ]; then rm -rf ".git/rebase-merge"; fi
     - if [ -d ".git/rebase-apply" ]; then rm -rf ".git/rebase-apply"; fi
@@ -37,6 +38,7 @@ versionBuild:
     - git remote set-url origin "http://${CI_PUSH_USER}:${CI_PUSH_TOKEN}@${GITLAB_SERVER}/${CI_PROJECT_PATH}.git"
     # 查看凭证
     - git config --global --list | grep credential
+    - cat ~/.git-credentials
     # 合并远程的更新
     - git fetch origin $CI_COMMIT_BRANCH
     - git rebase origin/$CI_COMMIT_BRANCH
