@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -12,8 +12,12 @@ namespace Jtext103.CFET2.Core.Config
         public IReadOnlyList<EventTransport> EventPublishTransports { get; }
         public EventTransport HttpEventSubscriptionTransport { get; }
         public int WebSocketPortOffset { get; }
+        public MqttConfiguration Mqtt { get; }
         public EventCommunicationConfiguration(IEnumerable<EventTransport> publish, EventTransport receive, int offset)
+            : this(publish, receive, offset, new MqttConfiguration()) { }
+        public EventCommunicationConfiguration(IEnumerable<EventTransport> publish, EventTransport receive, int offset, MqttConfiguration mqtt)
         {
+            Mqtt = mqtt ?? throw new ArgumentNullException(nameof(mqtt));
             EventPublishTransports = Copy(publish);
             ValidateTransport(receive);
             if (offset <= 0) throw new ArgumentOutOfRangeException(nameof(offset));
@@ -41,11 +45,11 @@ namespace Jtext103.CFET2.Core.Config
                 throw new ArgumentOutOfRangeException(nameof(httpPort), "HTTP port plus WebSocketPortOffset must be between 1 and 65535.");
             return (int)result;
         }
-        /// <summary>Standard host guard while MQTT remains a scaffold.</summary>
+        /// <summary>Checks required source settings before standard host startup; never falls back to WS.</summary>
         public void EnsureStandardHostSupported()
         {
-            if (HttpEventSubscriptionTransport == EventTransport.Mqtt || EventPublishTransports.Contains(EventTransport.Mqtt))
-                throw new NotSupportedException("MQTT event communication is not implemented. No WebSocket fallback is performed.");
+            if (EventPublishTransports.Contains(EventTransport.Mqtt) && Mqtt.SourceHttpBaseUri == null)
+                throw new ArgumentException("MQTT publishing requires a source HTTP origin.");
         }
     }
 }

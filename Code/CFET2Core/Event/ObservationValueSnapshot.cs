@@ -28,6 +28,9 @@ namespace Jtext103.CFET2.Core.Event
                 {
                     // Clone preserves rank, lower bounds and the exact runtime array type.
                     var copy = (Array)array.Clone();
+                    var elementType = type.GetElementType();
+                    if (ResourceObservationTypePolicy.IsScalar(Nullable.GetUnderlyingType(elementType) ?? elementType))
+                        return copy;
                     foreach (var indices in Indices(array))
                         copy.SetValue(Capture(array.GetValue(indices), ancestors, location + ".Array[" + string.Join(",", indices) + "]"), indices);
                     return copy;

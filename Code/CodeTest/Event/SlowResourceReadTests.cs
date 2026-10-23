@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -171,6 +171,8 @@ public class SlowResourceReadTests
                 json["ResourceMinDelta"] = GlobalConfig.ResourceMinDelta;
                 json["EventPublishTransports"] = Newtonsoft.Json.Linq.JArray.Parse(GlobalConfig.Get()["EventPublishTransports"]);
                 json["WebSocketPortOffset"] = GlobalConfig.WebSocketPortOffset;
+                foreach (var key in config.Keys.Where(k => (k.StartsWith("Mqtt") && k.EndsWith("Seconds")) || k == "MqttBrokerPort"))
+                    json[key] = int.Parse(config[key], System.Globalization.CultureInfo.InvariantCulture);
                 System.IO.File.WriteAllText(path, json.ToString());
                 GlobalConfig.Populate(path);
                 Assert.AreEqual(value == "250" ? 250 : 100, GlobalConfig.ResourceSlowGetThresholdMs);

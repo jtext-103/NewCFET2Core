@@ -1,4 +1,4 @@
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
@@ -64,6 +64,7 @@ namespace Jtext103.CFET2.Core.Config
             foreach (var property in document.Properties())
             {
                 var value = property.Value;
+                ValidateMqttJsonType(property.Name, value);
                 if ((property.Name == "HttpEventSubscriptionTransport" && value.Type != JTokenType.String) ||
                     (property.Name == "WebSocketPortOffset" && value.Type != JTokenType.Integer) ||
                     (property.Name == "EventPublishTransports" && value.Type != JTokenType.Array))
@@ -93,6 +94,7 @@ namespace Jtext103.CFET2.Core.Config
             configDict.Add("EventPublishTransports", JsonConvert.SerializeObject(EventPublishTransports.Select(x => x.ToString())));
             configDict.Add("HttpEventSubscriptionTransport", HttpEventSubscriptionTransport.ToString());
             configDict.Add("WebSocketPortOffset", WebSocketPortOffset.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            AddMqtt(configDict);
             return configDict;
         }
 
@@ -108,10 +110,13 @@ namespace Jtext103.CFET2.Core.Config
             var ip = configDict["IP"];
             var port = configDict["Port"];
             var accept = configDict["Accept"];
+            var mqtt = ParseMqtt(configDict);
+            mqtt.ResolveSource(ip, port, communication.EventPublishTransports.Contains(EventTransport.Mqtt));
             var slow = configDict.TryGetValue("ResourceSlowGetThresholdMs", out var slowRaw) && int.TryParse(slowRaw, out var slowMs) && slowMs > 0 ? slowMs : 100;
             var retention = configDict.TryGetValue("LogRetentionDays", out var retentionRaw) ? ParseLogRetentionDays(retentionRaw) : DefaultLogRetentionDays;
             var interval = configDict.TryGetValue("ResourceObservationIntervalMs", out var intervalRaw) ? ParseResourceObservationIntervalMs(intervalRaw) : DefaultResourceObservationIntervalMs;
             var resubscribe = configDict.TryGetValue("WebSocketResubscribeIntervalMs", out var resubscribeRaw) ? ParseWebSocketResubscribeIntervalMs(resubscribeRaw) : DefaultWebSocketResubscribeIntervalMs;
+            ApplyMqtt(mqtt);
             IP = ip;
             Port = port;
             Accept = accept;

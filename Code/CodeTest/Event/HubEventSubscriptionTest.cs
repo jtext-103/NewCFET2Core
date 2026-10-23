@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Linq;
 using System.Threading;
 using FluentAssertions;
 using Jtext103.CFET2.Core.Attributes;
@@ -75,31 +77,43 @@ namespace Jtext103.CFET2.Core.Test.Event
         }
 
         [TestMethod]
-        public void HubPublishWithRelativeSourceShouldNotAutomaticallyScopeToPublishingThing()
+        [DataRow(1)]
+        [DataRow(2)]
+        public void HubPublishWithRelativeSourceShouldNotAutomaticallyScopeToPublishingThing(int firstCompletedValue)
         {
             var firstThing = new PublishingThing();
             var secondThing = new PublishingThing();
             MyHub.TryAddThing(firstThing, "/things", "first");
             MyHub.TryAddThing(secondThing, "/things", "second");
-            var receivedCount = 0;
-            EventArg lastReceived = null;
+            var received = new ConcurrentQueue<EventArg>();
+            using var firstCompleted = new ManualResetEventSlim();
 
             using var token = MyHub.Subscribe(
                 new EventFilter("Status", "changed"),
                 e =>
                 {
-                    lastReceived = e;
-                    Interlocked.Increment(ref receivedCount);
+                    // Local handlers run independently; either callback may finish first.
+                    if ((int)e.Sample.ObjectVal != firstCompletedValue && !firstCompleted.Wait(3000))
+                    {
+                        return;
+                    }
+
+                    received.Enqueue(e);
+                    if ((int)e.Sample.ObjectVal == firstCompletedValue)
+                    {
+                        firstCompleted.Set();
+                    }
                 });
 
             firstThing.PublishRelativeStatus(1);
             secondThing.PublishRelativeStatus(2);
-            Thread.Sleep(500);
+            SpinWait.SpinUntil(() => received.Count == 2, 5000).Should().BeTrue();
 
-            receivedCount.Should().Be(2);
-            lastReceived.Should().NotBeNull();
-            lastReceived.Source.Should().Be("Status");
-            lastReceived.Sample.ObjectVal.Should().Be(2);
+            var events = received.ToArray();
+            events.Should().HaveCount(2);
+            events.Should().OnlyContain(e => e.Source == "Status" && e.EventType == "changed");
+            events.Select(e => (int)e.Sample.ObjectVal).Should().BeEquivalentTo(new[] { 1, 2 });
+            events[0].Sample.ObjectVal.Should().Be(firstCompletedValue);
         }
 
         [TestMethod]

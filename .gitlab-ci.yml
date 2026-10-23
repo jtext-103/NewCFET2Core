@@ -1,0 +1,41 @@
+stages:
+  - verify
+  - release
+
+variables:
+  GIT_DEPTH: "0"
+  PACKAGE_PROJECT: "Code/CFET2Core/CFET2Core.csproj"
+  TEST_PROJECT: "Code/CodeTest/CodeTest.csproj"
+  PACKAGE_ID: "CFET2Core"
+  NUGET_SOURCE: "https://api.nuget.org/v3/index.json"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+before_script:
+  - source .ci/setup-dotnet.sh
+
+verify:
+  stage: verify
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH'
+  script:
+    - dotnet test "$TEST_PROJECT" -c Release --logger "trx;LogFileName=tests.trx" --results-directory "$CI_PROJECT_DIR/artifacts/tests"
+  artifacts:
+    when: always
+    paths:
+      - artifacts/tests/
+    expire_in: 7 days
+
+release:
+  stage: release
+  resource_group: nuget-release
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - bash .ci/release-nuget.sh
+  artifacts:
+    when: always
+    paths:
+      - artifacts/
+    expire_in: 7 days

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -105,6 +105,8 @@ namespace Jtext103.CFET2.Core.Test.Event
                 json["ResourceMinDelta"] = GlobalConfig.ResourceMinDelta;
                 json["EventPublishTransports"] = Newtonsoft.Json.Linq.JArray.Parse(GlobalConfig.Get()["EventPublishTransports"]);
                 json["WebSocketPortOffset"] = GlobalConfig.WebSocketPortOffset;
+                foreach (var key in saved.Keys.Where(k => k.StartsWith("Mqtt") && k.EndsWith("Seconds") || k == "MqttBrokerPort"))
+                    json[key] = int.Parse(saved[key], System.Globalization.CultureInfo.InvariantCulture);
                 File.WriteAllText(file, json.ToString());
                 GlobalConfig.Populate(file);
                 Assert.AreEqual("/device/Value", GlobalConfig.AutoObserveList.Single().Path);

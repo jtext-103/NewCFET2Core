@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -27,7 +27,8 @@ namespace Jtext103.CFET2.Core.Config
             set { if (value <= 0) throw new ArgumentOutOfRangeException(nameof(WebSocketPortOffset)); webSocketPortOffset = value; }
         }
         internal static EventCommunicationConfiguration CaptureEventCommunicationConfiguration() =>
-            new EventCommunicationConfiguration(eventPublishTransports, httpEventSubscriptionTransport, webSocketPortOffset);
+            new EventCommunicationConfiguration(eventPublishTransports, httpEventSubscriptionTransport, webSocketPortOffset,
+                ConfiguredMqtt().ResolveSource(IP, Port, eventPublishTransports.Contains(EventTransport.Mqtt)));
         private static EventTransport ParseEventTransport(string raw, string field)
         {
             if (string.Equals(raw, "WebSocket", StringComparison.OrdinalIgnoreCase)) return EventTransport.WebSocket;

@@ -1,4 +1,4 @@
-#nullable disable
+﻿#nullable disable
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -30,6 +30,7 @@ namespace Jtext103.CFET2.Core.Test.Event
 
         [TestMethod] public void ConfigurationRoundTripDefaultsAndIsolation()
         {
+            GlobalConfig.IP = "http://localhost"; GlobalConfig.Port = "8000";
             var transports = new List<EventTransport> { EventTransport.WebSocket, EventTransport.Mqtt };
             GlobalConfig.EventPublishTransports = transports; transports.Clear();
             Assert.AreEqual(2, GlobalConfig.EventPublishTransports.Count);
@@ -116,13 +117,14 @@ namespace Jtext103.CFET2.Core.Test.Event
             Assert.ThrowsExactly<ProtocolNotSuportedException>(() => MyHub.Subscribe(new EventFilter { Host = "unknown://source:8000" }, _ => { }));
         }
 
-        [TestMethod] public void StandardHostRejectsMqttWithoutFallback()
+        [TestMethod] public void StandardHostSupportsMqttWithCapturedSource()
         {
+            GlobalConfig.IP = "http://localhost"; GlobalConfig.Port = "8000";
             Mount(); MyHub.ActiveEventCommunicationConfiguration.EnsureStandardHostSupported();
             Hub.KillMaster(); mounted = false; GlobalConfig.EventPublishTransports = new[] { EventTransport.WebSocket, EventTransport.Mqtt }; Mount();
-            Assert.ThrowsExactly<NotSupportedException>(() => MyHub.ActiveEventCommunicationConfiguration.EnsureStandardHostSupported());
+            MyHub.ActiveEventCommunicationConfiguration.EnsureStandardHostSupported();
             Hub.KillMaster(); mounted = false; GlobalConfig.EventPublishTransports = new[] { EventTransport.WebSocket }; GlobalConfig.HttpEventSubscriptionTransport = EventTransport.Mqtt; Mount();
-            Assert.ThrowsExactly<NotSupportedException>(() => MyHub.ActiveEventCommunicationConfiguration.EnsureStandardHostSupported());
+            MyHub.ActiveEventCommunicationConfiguration.EnsureStandardHostSupported();
         }
 
         [TestMethod] public void ProtocolConflictRejectsEntireRegistrationAndKeepsRoutesUsable()
