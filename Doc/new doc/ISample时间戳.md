@@ -26,13 +26,13 @@ MyHub.PublishResource("/device/temperature", 23.5);
 
 `SampleBase<T>` 将时间保存在 Context 的 `CFET2CORE_SAMPLE_TIMESTAMP` 键中，写入 UTC ISO 8601 `O` 格式字符串，保留 .NET ticks 精度。读取支持字符串、DateTimeOffset 和 DateTime；无时区字符串和 Unspecified DateTime 按 UTC 解释。缺失、空值或非法值返回 null，不使用当前时间兜底。设置 null 时移除该键。
 
-样本复制和类型转换保留时间。HTTP JSON、MessagePack 通过 Context 传输；WebSocket 完整模式通过 Context 传输，精简模式通过可选 `timestamp` 字段传输，并恢复到样本。无 Context 的兼容样本对象也读取 `timestamp`。WebSocket 协议版本保持不变，旧消息仍可接收。
+样本复制和类型转换保留时间。HTTP JSON、MessagePack 通过 Context 传输；WebSocket 完整模式通过 Context 传输，精简模式通过可选 `timestamp` 字段传输，并恢复到样本。无 Context 的兼容样本对象也读取 `timestamp`。WebSocket 协议版本保持不变，旧消息仍可接收。MQTT event 消息保留源端 Timestamp 和完整 Context，接收后恢复为 Core 样本；完整、精简及 null 样本的规则见 [MQTT Protocol 方案](../../../mqttcommunicationmodule/Doc/MQTTProtocol实现方案.md)。MQTT event 消息保留源端 Timestamp 和完整 Context，接收后恢复为 Core 样本；完整、精简及 null 样本的规则见 [MQTT Protocol 方案](../../../mqttcommunicationmodule/Doc/MQTTProtocol实现方案.md)。
 
 直接实现 ISample 的外部类型必须实现新属性并重新编译；元数据应遵循 Context 存储约定。继承 SampleBase<T> 的类型自动获得属性。旧客户端不会因为忽略新增字段获得时间戳能力，使用新接口需更新 Core 和对应通信模块。
 
 ## 联调构建
 
-2026-09-28 起，通信模块和 APP 统一直接引用同级工作区中的 Core 项目，无需 UseLocalCfet2Core 开关：
+2026-10-23 当前依赖：HTTP、WebSocket、MQTT 和 APP 均固定引用 CFET2Core 3.2.0 NuGet 包，不再依赖同级 Core 源码。Core 自身测试仍构建本仓库源码；模块测试验证各自源码与固定 Core 包的组合。以下命令从多仓库工作区根目录运行：
 
 ```powershell
 dotnet test newcfet2core/Code/CodeTest/CodeTest.csproj
@@ -40,5 +40,5 @@ dotnet test websocketcommunicationmodule/TestCode/TestCode.csproj
 dotnet test httpcommunicationmodule/TestCode/TestCode.csproj
 ```
 
-未来采用独立 NuGet 交付时，需先发布包含此接口的新 Core 包，再调整通信模块的包依赖。当前旧版包不包含该接口，不能用于编译新 WebSocket 模块。本次未发布包，也未替换已有 NuGet 缓存。
+独立交付时先发布 Core，再更新和发布通信模块，最后更新 APP 包依赖。当前组合为 Core 3.2.0、HTTP 1.0.2、WebSocket 1.1.0、MQTT 1.0.0；直接实现 ISample 的外部类型仍需按新接口重新编译。
 

@@ -18,14 +18,14 @@ CFET2 的核心运行时。它提供 `Hub`、Thing、资源访问、Sample、中
 - 支持本地与远程事件订阅分离、Host 归一化与隔离、事件路由表和并发安全订阅清理。
 - 支持日志、中间件、配置和 Sample 上下文。
 - 已实现本地与远程 `SubscribeResource`、`[Cfet2Event]` 原生事件标识，以及符合资格的标量和容器资源内部周期观测。远程路径通过资源模块取得初始值，再经事件模块注册订阅；WebSocket 服务端已接入精确和正则资源订阅。完整 HTTP + WebSocket 应用链路的验证范围须以实际测试记录为准。
-- 已实现 `AutoObserveList` / `AutoDenyList`、公共资源快照比较、`Thing.PublishResourceIfChanged`、minDelta 阈值和 HTTP 事件订阅传输选择配置。这里描述当前源码能力，不代表这些后续功能已包含在已发布 NuGet 包中。
+- 已实现 `AutoObserveList` / `AutoDenyList`、公共资源快照比较、`Thing.PublishResourceIfChanged`、minDelta 阈值和 HTTP 事件订阅传输选择配置。当前项目版本为 3.2.0，APP 和通信模块均固定引用 Core 3.2.0；旧版包不能作为这些能力的依据。
 
 ## 快速开始
 
 安装 Core：
 
 ```powershell
-dotnet add package CFET2Core --version 3.0.0
+dotnet add package CFET2Core --version 3.2.0
 ```
 
 最小宿主示例：
@@ -65,7 +65,7 @@ WebSocket 服务端无参数精确资源订阅复用同一校验，不支持的�
 
 `Thing.PublishResourceIfChanged` 为主动发布提供独立快照和按路径保存的比较基准，支持参数化事件路径，并使用同一 minDelta 配置；首次调用发布，返回 true 仅表示 Core 接受入队。直接 `Publish` / `PublishResource` 不执行阈值比较，也不更新该辅助函数的基准。
 
-`AutoObserveList` 在全部 Thing.Start 成功后建立常驻观察；`AutoDenyList` 禁止自动轮询，不屏蔽主动事件。列表、阈值和通信选择均采用启动配置快照，修改后重建 Core 或重启应用。HTTP 事件订阅通过 `HttpEventSubscriptionTransport` 选取事件模块，WebSocket 地址使用 `WebSocketPortOffset`（默认 1）；MQTT 配置入口已存在，但标准宿主仍拒绝实际 MQTT 通信。
+`AutoObserveList` 在全部 Thing.Start 成功后建立常驻观察；`AutoDenyList` 禁止自动轮询，不屏蔽主动事件。列表、阈值和通信选择均采用启动配置快照，修改后重建 Core 或重启应用。HTTP 事件订阅通过 `HttpEventSubscriptionTransport` 选取事件模块，WebSocket 地址使用 `WebSocketPortOffset`（默认 1）；标准宿主已支持 MQTT 单发布、WS/MQTT 双发布和 HTTP 事件订阅走 MQTT；HTTP 初读仍由资源模块完成。MQTT 配置随 Core 创建形成不可变快照，标准宿主始终注册 MQTT，默认 WS 配置也会异步连接 localhost:1883。配置示例见 [APP 事件通信配置](../newcfet2app/CFET2APP/Config/README.md)。
 
 ## 文档
 
@@ -86,4 +86,16 @@ WebSocket 服务端无参数精确资源订阅复用同一校验，不支持的�
 - [事件处理总体设计](<Doc/new doc/CFETCore事件处理总体设计.md>)
 - [事件系统落地方案](<Doc/new doc/CFETCore事件系统落地方案.md>)
 - [升级内容](<Doc/new doc/CFETCore升级内容.md>)
+- [当前生命周期](Doc/CFETCore当前生命周期说明.md)
+- [生命周期与事件出口设计](Doc/CFETCore生命周期与事件出口设计方案.md)
+- [源端样本时间戳](<Doc/new doc/ISample时间戳.md>)
+- [当前生命周期](Doc/CFETCore当前生命周期说明.md)
+- [生命周期与事件出口设计](Doc/CFETCore生命周期与事件出口设计方案.md)
+- [源端样本时间戳](<Doc/new doc/ISample时间戳.md>)
 - [历史资料](<Expired/old doc/>)
+
+## 构建与发布
+
+当前 `.gitlab-ci.yml` 在默认分支执行版本更新、Release 测试、构建和打包，并在 publish 阶段推送 NuGet。Core、HTTP、WebSocket、MQTT 按此顺序处理依赖，先确认所需 Core 包可还原，再更新下游固定包版本。
+
+提交说明末尾的 `-a` 升主版本并清零次版本和修订号，`-b` 升次版本并清零修订号；没有这两个末尾标记时升修订号。独立的 `-notest` 标记跳过测试，但仍执行构建、打包和发布；组合示例为 `发布更新 -notest -b`。CI 默认遍历仓库内测试项目，执行 `dotnet test --configuration Release`；没有配置真实 Broker 开关和工具时，不能将流水线通过视为 MQTT 网络集成验证通过。

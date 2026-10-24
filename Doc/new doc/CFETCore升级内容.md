@@ -1,8 +1,8 @@
 # CFETCore升级内容
 
-## 当前实现与阅读边界（2026-10-14）
+## 当前实现与阅读边界（2026-10-23）
 
-本文记录当前工作区的 Core 升级内容，并区分已实现能力、通信接入边界和已知缺陷。当前已实现单资源订阅、远程初始 Get、标量及受支持容器资源自动观察、Core 正则组合订阅及共享观察句柄、自动观察列表、公共比较与主动变化发布、minDelta 和宿主通信选择配置。现有 WebSocket 精确资源订阅和重连重订阅已存在；Core 正则观察现已接入 WS 服务端，并增加异步准备及 Core 慢 Get 监测。源码实现状态不代表已发布 NuGet 版本，Core 测试与跨模块端到端验收分别说明。
+本文记录当前工作区的 Core 升级内容，并区分已实现能力、通信接入边界和已知缺陷。当前已实现单资源订阅、远程初始 Get、标量及受支持容器资源自动观察、Core 正则组合订阅及共享观察句柄、自动观察列表、公共比较与主动变化发布、minDelta 和宿主通信选择配置。现有 WebSocket 精确资源订阅和重连重订阅已存在；Core 正则观察现已接入 WS 服务端，并增加异步准备及 Core 慢 Get 监测。当前 Core 项目版本及下游固定依赖均为 3.2.0；Core 测试与跨模块端到端验收分别说明。各节早期验证数字保留对应阶段含义。
 
 - 未标记 `[Cfet2Event]` 且 getter 无参数的资源支持标量、数组、精确 `List<T>` 和 `Dictionary<TKey, TValue>` 自动观测。单资源 `SubscribeResource` 对不支持类型抛错；正则组合 `SubscribeResources` 对该资源返回 `Skipped`，其余资源和事件订阅继续。完整类型列表见 [Core README](../../README.md#资源自动观测的类型边界)。
 - **所有含参数 getter 均不自动观察**，包括默认参数和 params。精确 SubscribeResource 已支持按传入地址读取初值并接收对应路径主动事件；具体行为和正则示例见第 9 节。
@@ -25,7 +25,7 @@
 | 观察 Get 慢读监测 | 已实现，默认 100ms Error，独立于正则匹配超时，不强制中止读取 |
 | AutoObserveList / AutoDenyList、公共比较与主动变化发布、minDelta | 已实现，列表和阈值采用启动快照 |
 | HTTP 事件订阅传输选择、WebSocketPortOffset | 已实现；事件协议冲突在注入与注册表写入前拒绝，失败不留下部分登记 |
-| MQTT 实际通信与观察租约 | 未实现，标准宿主拒绝选择 MQTT |
+| MQTT 实际通信与观察租约 | 已实现，标准宿主支持 MQTT 单发布、双发布和 HTTP 事件选路；Core 保存配置快照，MQTT 模块负责通信与租约 |
 
 详细设计与实施记录：[Core 正则资源观察实现文档](<../../Code/CFET2Core/doc/Core 正则资源观察/Core 正则资源观察实现文档.md>)；接入文档：[Core 正则资源观察接入 WS 文档](<../../Code/CFET2Core/doc/Core 正则资源观察/Core 正则资源观察接入WS文档.md>)。
 
@@ -329,7 +329,7 @@ foreach (var result in subscription.ObservationResults)
 
 保留已有 `DateTimeOffset? Timestamp`，时间统一为 UTC。开发者显式提供的源端时间优先；主动 Publish 缺少时间时采用发布调用时间，自动观察缺少时间时采用检测时间。普通 Get 与远端事件接收不补造时间，旧消息缺失时为 null。
 
-本地 Publish 为事件和样本 Context 建立快照，不修改调用者的时间戳。现有 WS 完整/精简模式以及 HTTP JSON、MessagePack 时间传输行为继续保留；本次没有重做通信序列化，也未实现 MQTT 时间传输。
+本地 Publish 为事件和样本 Context 建立快照，不修改调用者的时间戳。现有 WS 完整/精简模式以及 HTTP JSON、MessagePack 时间传输行为继续保留；本次没有重做通信序列化，MQTT 也已实现源端 Timestamp 和样本 Context 传输，详见 [时间戳说明](ISample时间戳.md)。
 
 ## 9. 当前实现缺陷与使用注意事项
 
@@ -381,7 +381,7 @@ Code review 已复现：标准资源读取把 getter 异常放入无效样本的
 
 后续 WS 接入已完成：首次接入验证为 WS 全量 222、Core 全量 185 项通过，均为 0 失败、0 跳过。新增测试覆盖慢 Get、异步准备、revision 失败幂等、容量拒绝、ACK 重发/重连、客户端 Hub 回调及释放。实际配置、后续验证批次和限制见仓库内 [WS 接入文档第 13 节](<../../Code/CFET2Core/doc/Core 正则资源观察/Core 正则资源观察接入WS文档.md#13-实际实现与验证摘要>)。
 
-自动观察列表已实现：AutoObserveList 在全部组件 Start 成功后持有常驻观察，AutoDenyList 在统一观察入口禁止轮询，两者均不屏蔽主动事件。配置采用启动快照，修改后重启生效。该阶段全量回归 Core 218 项、WS 243 项通过；后续移除配置锁的专项回归 Core 23 项通过。配置、生命周期和测试范围见 [自动观察列表实现方案](../../Code/CFET2Core/doc/自动观察列表/自动观察列表实现方案.md)。minDelta 和宿主通信选择配置已在后续阶段实现，见 [minDelta 使用示例](../../Code/CFET2Core/doc/主动变化发布/minDelta使用示例.md) 和 [通信配置与路由](../../Code/CFET2Core/doc/通信配置与路由/通信配置与HTTP事件订阅路由实现方案.md)。MQTT 实际通信及资源租约仍属于后续范围。
+自动观察列表已实现：AutoObserveList 在全部组件 Start 成功后持有常驻观察，AutoDenyList 在统一观察入口禁止轮询，两者均不屏蔽主动事件。配置采用启动快照，修改后重启生效。该阶段全量回归 Core 218 项、WS 243 项通过；后续移除配置锁的专项回归 Core 23 项通过。配置、生命周期和测试范围见 [自动观察列表实现方案](../../Code/CFET2Core/doc/自动观察列表/自动观察列表实现方案.md)。minDelta 和宿主通信选择配置已在后续阶段实现，见 [minDelta 使用示例](../../Code/CFET2Core/doc/主动变化发布/minDelta使用示例.md) 和 [通信配置与路由](../../Code/CFET2Core/doc/通信配置与路由/通信配置与HTTP事件订阅路由实现方案.md)。MQTT 实际通信及资源租约已在后续阶段完成，当前配置与运行方式见 [APP 配置](../../../newcfet2app/CFET2APP/Config/README.md)。
 
 慢 Get 配置为 `ResourceSlowGetThresholdMs`，默认 100ms，执行期间可报警，返回后补耗时；不强制中断、不改变有效结果。WS 准备默认执行并发 4、排队容量 256，满载拒绝且不自动重试。已复现不同重叠 regex 的既有重复回调问题，按已确认边界独立记录，未在本次加入跨聚合去重。
 
@@ -417,4 +417,4 @@ Code review 已复现：标准资源读取把 getter 异常放入无效样本的
 
 已落定：注册后即可订阅，不等待 Start；正则建立时匹配一次；初次失败不自动重试；单资源失败不撤销整个组合订阅；单次正则匹配 100ms；不扩展 WS 观察状态协议。观察周期、相等性比较及事件通信抽象已经有实现，不再列为未确定事项。
 
-尚待实施：第 9 节错误详情修复、重叠正则既有重复路由的独立设计、MQTT 实际通信及资源租约。事件协议冲突注册契约已修正，注册前检查已有协议和模块内重复，http 别名允许共享。AutoObserveList / AutoDenyList、容器比较、PublishResourceIfChanged、minDelta 和宿主通信选择配置已实现，不再列入后续范围。带参数 Get 的自动观察当前不支持，若要补齐，需先细化参数实例与事件来源设计。
+尚待实施：第 9 节错误详情修复、重叠正则既有重复路由的独立设计。MQTT 实际通信及资源租约已实现。事件协议冲突注册契约已修正，注册前检查已有协议和模块内重复，http 别名允许共享。AutoObserveList / AutoDenyList、容器比较、PublishResourceIfChanged、minDelta 和宿主通信选择配置已实现，不再列入后续范围。带参数 Get 的自动观察当前不支持，若要补齐，需先细化参数实例与事件来源设计。

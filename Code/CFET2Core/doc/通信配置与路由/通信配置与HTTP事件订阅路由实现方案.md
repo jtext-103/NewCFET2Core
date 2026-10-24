@@ -27,7 +27,7 @@ HTTP 地址统一按配置选择 WS 或 MQTT 事件传输，普通 HTTP Get/Set/
 - GlobalConfig.EventPublishTransports 为只读集合，允许单项或两项，禁止空集合、null、重复项及未知值；setter 复制输入。
 - HttpEventSubscriptionTransport 为单值；WebSocketPortOffset 为正整数，计算后的 HTTP/WS 端口均须为 1–65535。
 - 缺省值如上；Get 输出规范名称及发布集合 JSON 数组字符串，Set 接受字典接口，Populate 要求 JSON 数组、字符串和整数类型。显式非法值拒绝，全部字段先校验后写入。
-- 公共不可变 EventCommunicationConfiguration 提供三个生效属性、GetWebSocketPort(int) 及 EnsureStandardHostSupported()。构造参数同样校验并复制。CommunicationManager 在 Core 创建时捕获快照，Hub.ActiveEventCommunicationConfiguration 提供查询。修改静态 GlobalConfig 仅对新 Core 生效，应用须重启。
+- 公共不可变 EventCommunicationConfiguration 提供发布集合、HTTP 订阅传输、端口偏移及 Mqtt 配置快照、GetWebSocketPort(int) 和 EnsureStandardHostSupported()。构造参数同样校验并复制。CommunicationManager 在 Core 创建时捕获快照，Hub.ActiveEventCommunicationConfiguration 提供查询。修改静态 GlobalConfig 仅对新 Core 生效，应用须重启。
 - IEventCommunicationModule 新增非抽象 EventTransport? Transport，默认 null，旧自定义模块不必改写。WS 返回 WebSocket，MQTT 骨架返回 Mqtt。
 
 ## 3. 路由和应用接入
@@ -36,7 +36,7 @@ HTTP 地址统一按配置选择 WS 或 MQTT 事件传输，普通 HTTP Get/Set/
 2. EventFilter 的 HTTP 地址转换、EventHub 手工指定 HTTP Host 的订阅及 SubscribeResource 前置检查使用同一模块选择。非 HTTP 协议继续按协议表处理；转换不改变资源表达式和参数路径。Token 记录实际事件协议，退订按原所属模块释放。
 3. 缺失模块或转换返回空 Host 时抛 ProtocolNotSuportedException，不降级本地订阅；SubscribeResource 在初读前校验路由与目标端口。既有模块 Subscribe 运行期异常的清理及返回行为不在本阶段重构。
 4. WS HTTP 地址转换使用 Hub 的生效偏移，显式 WS 地址端口不变。未注入 Hub 的独立 WS 实例使用构造时捕获的配置，保留直接 GetFullHost 的使用方式。
-5. 标准应用在 AddThings 起始检查 EnsureStandardHostSupported，出现 MQTT 发布或 HTTP 订阅走 MQTT 时抛 NotSupportedException，不注册骨架或回退 WS。检查发生在启动通信和 Thing.Start 前。
+5. 标准应用在启动通信和 Thing.Start 前校验生效配置并注册 WS/MQTT。EnsureStandardHostSupported 现检查 MQTT 发布所需的来源 HTTP origin，不再以 MQTT 未实现为由拒绝启动。发布集合决定各模块的来源发布能力；HTTP 事件订阅由 HttpEventSubscriptionTransport 选择单一模块，资源初读仍走 HTTP。
 6. 标准应用 WS EnableServer 根据发布集合控制，WS 客户端仍支持 HTTP 订阅及显式 WS 订阅；监听端口和地址转换使用同一配置快照。当前环境覆盖仅涉及分发并发，不覆盖监听或启用状态。
 
 本阶段可解析及测试双协议配置，但标准应用不能运行 MQTT 配置；MQTT 路由通过模拟模块验证，实际通信另阶段完成。未新增 Broker 或租约字段，不改变 HTTP/WS 协议载荷、时间戳、观察资格或参数编码。
@@ -90,3 +90,9 @@ dotnet build newcfet2app/CFET2APP/CFET2APP.csproj --no-restore -v quiet -p:Warni
 
 - 协议冲突由原先仅记录日志改为注册前明确拒绝，失败不污染任一注册表；共享 http 别名保留。增加 ProtocolConflictRejectsEntireRegistrationAndKeepsRoutesUsable，覆盖大小写冲突、模块内部重复、失败后路由可用及不启动失败模块。原 DuplicateEventProtocolRegistrationShouldKeepFirstModule 更新为同时断言异常及保留第一个模块。
 - 使用第 5 节相同命令，将日志文件名改为 CommunicationRouting-Conflict-Core.trx 和 CommunicationRouting-Conflict-WS.trx：Core 283/283、WS 284/284 通过，无失败或跳过；应用构建和 Core diff --check 通过。
+
+## 当前状态补充（2026-10-23）
+
+标准宿主已支持 MQTT。本文早期“拒绝 MQTT 启动”的进程测试和本地 Core ProjectReference 描述仅属于原阶段记录，不代表当前行为。当前各模块固定依赖 Core 3.2.0，APP 的真实标准宿主测试位于 `newcfet2app/CFET2APP.Tests`。
+
+标准宿主始终注册两个事件模块；仅 MQTT 发布时 WS 服务端关闭，不计算本地监听端口，但保留 WS 客户端订阅。开启 WS 服务端时才校验本地 HTTP 端口加偏移的结果。MQTT 配置与来源校验、双发布、默认 Broker 连接和部署准备见 [APP 配置](../../../../../newcfet2app/CFET2APP/Config/README.md)。早期测试数字保留原日期，本次文档更新未重跑测试。
